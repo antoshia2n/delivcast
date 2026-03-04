@@ -8,7 +8,7 @@ export default async function Page() {
   const sb = createServerClient()
 
   const [postsRes, templatesRes, recurringRes] = await Promise.all([
-    sb.from('dc_posts').select('*, post_targets(*)').order('date').order('time'),
+    sb.from('dc_posts').select('*, dc_post_targets(*)').order('date').order('time'),
     sb.from('dc_templates').select('*').order('id'),
     sb.from('dc_recurring_rules').select('*').order('id'),
   ])
