@@ -23,7 +23,7 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
   const { error } = await sb.from('dc_posts').update(row).eq('id', params.id)
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-  // post_targets: 一旦全削除して再挿入（シンプルな方法）
+  // dc_post_targets を一旦全削除して再挿入
   await sb.from('dc_post_targets').delete().eq('post_id', params.id)
   if (postTargets?.length) {
     const targets = postTargets.map((pt: any) => ({
@@ -34,9 +34,14 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
     await sb.from('dc_post_targets').insert(targets)
   }
 
-  const { data: full } = await sb
+  const { data: full, error: fetchError } = await sb
     .from('dc_posts').select('*, dc_post_targets(*)')
     .eq('id', params.id).single()
+
+  if (fetchError || !full) {
+    return NextResponse.json({ error: fetchError?.message ?? 'record not found after update' }, { status: 500 })
+  }
+
   return NextResponse.json(rowToPost(full))
 }
 
