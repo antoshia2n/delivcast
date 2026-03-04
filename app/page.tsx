@@ -7,13 +7,20 @@ export const dynamic = 'force-dynamic'
 export default async function Page() {
   const sb = createServerClient()
 
-  const [postsRes, templatesRes, recurringRes] = await Promise.all([
-    sb.from('dc_posts').select('*, dc_post_targets(*)').order('date').order('time'),
+  const [postsRes, targetsRes, templatesRes, recurringRes] = await Promise.all([
+    sb.from('dc_posts').select('*').order('date').order('time'),
+    sb.from('dc_post_targets').select('*'),
     sb.from('dc_templates').select('*').order('id'),
     sb.from('dc_recurring_rules').select('*').order('id'),
   ])
 
-  const posts     = (postsRes.data     ?? []).map(rowToPost)
+  // postTargetsを各postにマージ
+  const allTargets = targetsRes.data ?? []
+  const posts = (postsRes.data ?? []).map(row => rowToPost({
+    ...row,
+    dc_post_targets: allTargets.filter(t => t.post_id === row.id)
+  }))
+
   const templates = (templatesRes.data ?? []).map(rowToTemplate)
   const recurring = (recurringRes.data ?? []).map(rowToRecurring)
 
