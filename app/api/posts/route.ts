@@ -6,7 +6,7 @@ export async function GET() {
   const sb = createServerClient()
   const { data, error } = await sb
     .from('dc_posts')
-    .select('*, post_targets(*)')
+    .select('*, dc_post_targets(*)')
     .order('date', { ascending: true })
     .order('time', { ascending: true })
 
@@ -50,7 +50,7 @@ export async function POST(req: Request) {
 
   // 4. 再取得して返す
   const { data: full } = await sb
-    .from('dc_posts').select('*, post_targets(*)')
+    .from('dc_posts').select('*, dc_post_targets(*)')
     .eq('id', data.id).single()
   return NextResponse.json(rowToPost(full), { status: 201 })
 }
