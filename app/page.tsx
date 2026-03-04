@@ -14,7 +14,12 @@ export default async function Page() {
     sb.from('dc_recurring_rules').select('*').order('id'),
   ])
 
-  // postTargetsを各postにマージ
+  // エラーログ
+  if (postsRes.error)     console.error('[DC] posts error:', postsRes.error.message)
+  if (targetsRes.error)   console.error('[DC] targets error:', targetsRes.error.message)
+  if (templatesRes.error) console.error('[DC] templates error:', templatesRes.error.message)
+  if (recurringRes.error) console.error('[DC] recurring error:', recurringRes.error.message)
+
   const allTargets = targetsRes.data ?? []
   const posts = (postsRes.data ?? []).map(row => rowToPost({
     ...row,
@@ -23,6 +28,8 @@ export default async function Page() {
 
   const templates = (templatesRes.data ?? []).map(rowToTemplate)
   const recurring = (recurringRes.data ?? []).map(rowToRecurring)
+
+  console.log('[DC] loaded:', posts.length, 'posts,', templates.length, 'templates,', recurring.length, 'recurring')
 
   return <DelivCast initialPosts={posts} initialTemplates={templates} initialRecurring={recurring} />
 }
