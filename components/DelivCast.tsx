@@ -1782,7 +1782,7 @@ export default function DelivCast({ initialPosts, initialTemplates, initialRecur
   }, []);
 
   const upsertPost = useCallback(async (p: Post) => {
-    const isNew = !p.id || String(p.id).startsWith("gen_");
+    const isNew = !p.id || String(p.id).startsWith("gen_") || Number(p.id) > 1e12;
     try {
       const method = isNew ? "POST" : "PUT";
       const url    = isNew ? "/api/posts" : `/api/posts/${p.id}`;
