@@ -63,7 +63,7 @@ export function rowToPost(row: any): Post {
     note: row.note,
     recurringId: row.recurring_id ?? null,
     isGenerated: false,
-    postTargets: (row.post_targets ?? []).map((pt: any) => ({
+    postTargets: (row.dc_post_targets ?? row.post_targets ?? []).map((pt: any) => ({
       targetId: pt.target_id,
       url: pt.url,
     })),
