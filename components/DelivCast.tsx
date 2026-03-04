@@ -912,7 +912,26 @@ function TemplateView({ templates, setTemplates, showToast }) {
       setEditing(null); showToast("テンプレートを保存しました");
     } catch (e) { showToast("保存に失敗しました"); console.error(e); }
   };
-  const importFromNotion = (item) => { setTemplates(ts => [...ts, item]); showToast(`「${item.title}」を取り込みました`); };
+  const deleteTpl = async (id: any) => {
+    try {
+      if (id && typeof id === "number" && id < 1e12) {
+        const res = await fetch(`/api/templates/${id}`, { method: "DELETE" });
+        if (!res.ok) throw new Error(await res.text());
+      }
+      setTemplates(ts => ts.filter(x => x.id !== id));
+      showToast("テンプレートを削除しました");
+    } catch (e) { showToast("削除に失敗しました"); console.error(e); }
+  };
+
+  const importFromNotion = async (item: any) => {
+    try {
+      const res = await fetch("/api/templates", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(item) });
+      if (!res.ok) throw new Error(await res.text());
+      const saved = await res.json();
+      setTemplates(ts => [...ts, saved]);
+      showToast(`「${saved.title}」を取り込みました`);
+    } catch (e) { showToast("取り込みに失敗しました"); console.error(e); }
+  };
 
   return (
     <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"hidden" }}>
@@ -988,9 +1007,13 @@ function TemplateView({ templates, setTemplates, showToast }) {
               <label style={S.label}>テンプレート内容</label>
               <textarea value={editing.body} onChange={e => setEditing({...editing,body:e.target.value})} style={{ ...S.input, minHeight:160, resize:"vertical", lineHeight:1.8 }} />
             </div>
-            <div style={{ display:"flex", gap:8, justifyContent:"flex-end" }}>
-              <button className="btn-ghost" onClick={() => setEditing(null)} style={S.ghost}>キャンセル</button>
-              <button onClick={() => saveTpl(editing)} style={S.primary}>保存する</button>
+            <div style={{ display:"flex", gap:8, justifyContent:"space-between" }}>
+              <button onClick={() => { if(window.confirm("削除しますか？")) { deleteTpl(editing.id); setEditing(null); } }}
+                style={{ ...S.ghost, color:"#EF4444", borderColor:"#FECACA" }}>削除</button>
+              <div style={{ display:"flex", gap:8 }}>
+                <button className="btn-ghost" onClick={() => setEditing(null)} style={S.ghost}>キャンセル</button>
+                <button onClick={() => saveTpl(editing)} style={S.primary}>保存する</button>
+              </div>
             </div>
           </div>
         </div>
@@ -1206,7 +1229,14 @@ function SettingsView({ recurringRules, setRecurringRules, notifSettings, setNot
                     {r.platforms.map(pid => <PlatformChip key={pid} platformId={pid} size="xs" />)}
                   </div>
                 </div>
-                <Toggle on={r.active} onChange={v => setRecurringRules(rs => rs.map(rr => rr.id===r.id?{...rr,active:v}:rr))} />
+                <Toggle on={r.active} onChange={async v => {
+                  const updated = {...r, active: v};
+                  try {
+                    const res = await fetch(`/api/recurring/${r.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(updated) });
+                    if (!res.ok) throw new Error(await res.text());
+                    setRecurringRules(rs => rs.map(rr => rr.id===r.id?{...rr,active:v}:rr));
+                  } catch (e) { showToast("保存に失敗しました"); }
+                }} />
               </div>
             ))}
           </div>
@@ -1297,10 +1327,26 @@ function SettingsView({ recurringRules, setRecurringRules, notifSettings, setNot
   );
 }
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-function DestView() {
+function DestView({ showToast }) {
   const [dests, setDests] = useState(PLATFORMS.map(p => ({ ...p, active:p.id!=="ig", account:`@my_${p.id}` })));
   const [tgt, setTgt] = useState(TARGETS.map(t => ({ ...t, active:true, accountUrl:"", memo:"" })));
   const [tab, setTab] = useState("targets");
+  const [saving, setSaving] = useState(false);
+
+  const saveTargets = async () => {
+    setSaving(true);
+    try {
+      for (const t of tgt) {
+        await fetch(`/api/targets`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: t.id, name: t.name, color: t.color, icon: t.icon, active: t.active, account_url: t.accountUrl, memo: t.memo })
+        });
+      }
+      showToast("配信先を保存しました");
+    } catch (e) { showToast("保存に失敗しました"); }
+    setSaving(false);
+  };
   return (
     <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"hidden" }}>
       <div style={{ padding:"14px 24px 0", background:"#F8F5FF", borderBottom:"1px solid #E8E2FF", flexShrink:0 }}>
@@ -1345,6 +1391,12 @@ function DestView() {
             ))}
           </div>
         )}
+        <div style={{ padding:"16px 0" }}>
+          <button onClick={saveTargets} disabled={saving} style={{ ...S.primary, opacity:saving?0.6:1 }}>
+            {saving ? "保存中..." : "配信先を保存"}
+          </button>
+        </div>
+
         {tab === "platforms" && (
           <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(260px,1fr))", gap:12 }}>
             {dests.map(d => (
@@ -1944,7 +1996,7 @@ export default function DelivCast({ initialPosts, initialTemplates, initialRecur
           {view==="calendar" && <CalendarView allPosts={allPosts} weekAnchor={weekAnchor} setWeekAnchor={setWeekAnchor} selectedPost={selectedPost} onSelect={setSelectedPost} onNew={newPost} />}
           {view==="list"     && <ListView posts={allPosts} filterStatus={filterStatus} setFilterStatus={setFilterStatus} onSelect={setSelectedPost} onNew={() => newPost(todayStr(),"10:00")} setPosts={setPosts} onStatusChange={upsertPost} />}
           {view==="template" && <TemplateView templates={templates} setTemplates={setTemplates} showToast={showToast} />}
-          {view==="dest"     && <DestView />}
+          {view==="dest"     && <DestView showToast={showToast} />}
           {view==="settings" && <SettingsView recurringRules={recurringRules} setRecurringRules={setRecurringRules} notifSettings={notifSettings} setNotifSettings={setNotifSettings} showToast={showToast} allPosts={allPosts} templates={templates} />}
           {view==="setup"    && <SetupView posts={posts} templates={templates} recurringRules={recurringRules} showToast={showToast} />}
           {view==="help"     && <HelpView />}
