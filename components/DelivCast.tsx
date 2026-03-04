@@ -1143,9 +1143,17 @@ function SettingsView({ recurringRules, setRecurringRules, notifSettings, setNot
   const [emailPreviewOpen, setEmailPreviewOpen] = useState(false);
   const FREQ_LABELS = { daily:"毎日", weekly:"毎週", biweekly:"隔週", monthly:"毎月" };
 
-  const saveRule = (r) => {
-    setRecurringRules(rs => rs.some(x=>x.id===r.id) ? rs.map(x=>x.id===r.id?r:x) : [...rs,r]);
-    setEditRule(null); showToast("定期スケジュールを保存しました");
+  const saveRule = async (r) => {
+    try {
+      const isNew = !recurringRules.some(x => x.id === r.id);
+      const method = isNew ? "POST" : "PUT";
+      const url    = isNew ? "/api/recurring" : `/api/recurring/${r.id}`;
+      const res    = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(r) });
+      if (!res.ok) throw new Error(await res.text());
+      const saved = await res.json();
+      setRecurringRules(rs => isNew ? [...rs, saved] : rs.map(x => x.id === r.id ? saved : x));
+      setEditRule(null); showToast("定期スケジュールを保存しました");
+    } catch (e) { showToast("保存に失敗しました"); console.error(e); }
   };
 
   return (
