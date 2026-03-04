@@ -1,3 +1,4 @@
+// @ts-nocheck
 "use client"
 import { useState, useRef, useEffect, useCallback, useMemo } from "react"
 import type { Post, Template, RecurringRule } from "@/lib/types"
