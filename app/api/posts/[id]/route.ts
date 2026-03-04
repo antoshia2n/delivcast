@@ -35,7 +35,7 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
   }
 
   const { data: full } = await sb
-    .from('dc_posts').select('*, post_targets(*)')
+    .from('dc_posts').select('*, dc_post_targets(*)')
     .eq('id', params.id).single()
   return NextResponse.json(rowToPost(full))
 }
