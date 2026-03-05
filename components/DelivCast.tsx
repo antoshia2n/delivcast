@@ -240,16 +240,14 @@ function generateRecurringPosts(rules, existingPosts, weeksAhead = 4) {
 
     while (cursor <= endDate) {
       const ds = fmtDate(cursor);
-      if (ds >= todayStr()) {
-        const alreadyExists = existingPosts.some(p => p.recurringId === rule.id && p.date === ds);
-        if (!alreadyExists) {
-          const title = rule.titleTemplate.replace("{{n}}", counter);
-          generated.push({
-            id: `gen_${rule.id}_${ds}`, title, date: ds, time: rule.time,
-            duration: rule.duration, status: "draft", platforms: rule.platforms,
-            tags: rule.tags, body: "", note: "", recurringId: rule.id, isGenerated: true, postTargets: [], defaultTemplateId: rule.defaultTemplateId || null,
-          });
-        }
+      const alreadyExists = existingPosts.some(p => p.recurringId === rule.id && p.date === ds);
+      if (!alreadyExists) {
+        const title = rule.titleTemplate.replace("{{n}}", counter);
+        generated.push({
+          id: `gen_${rule.id}_${ds}`, title, date: ds, time: rule.time,
+          duration: rule.duration, status: "draft", platforms: rule.platforms,
+          tags: rule.tags, body: "", note: "", recurringId: rule.id, isGenerated: true, postTargets: [], defaultTemplateId: rule.defaultTemplateId || null,
+        });
       }
       counter++;
       if (rule.freq === "weekly")   cursor.setDate(cursor.getDate() + 7);
