@@ -455,7 +455,7 @@ function NotionImportPanel({ onImport, onClose }) {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // CALENDAR VIEW
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-function CalendarView({ allPosts, weekAnchor, setWeekAnchor, selectedPost, onSelect, onNew }) {
+function CalendarView({ allPosts, weekAnchor, setWeekAnchor, selectedPost, onSelect, onNew, onNewRecurring }) {
   const calRef = useRef(null);
   const weekDates = getWeekDates(weekAnchor);
   const HOURS = Array.from({ length: 24 }, (_, i) => i);
@@ -481,6 +481,7 @@ function CalendarView({ allPosts, weekAnchor, setWeekAnchor, selectedPost, onSel
           <button style={S.ghost} className="btn-ghost" onClick={() => { const d=new Date(weekAnchor); d.setDate(d.getDate()-7); setWeekAnchor(d); }}>←</button>
           <button style={{ ...S.ghost, fontSize:12, fontWeight:700, padding:"6px 12px" }} className="btn-ghost" onClick={() => setWeekAnchor(new Date())}>今週</button>
           <button style={S.ghost} className="btn-ghost" onClick={() => { const d=new Date(weekAnchor); d.setDate(d.getDate()+7); setWeekAnchor(d); }}>→</button>
+          <button onClick={onNewRecurring} style={{ ...S.ghost, fontSize:12, fontWeight:700, borderColor:"#C9BCEE", color:"#7C70B8" }}>↻ 定期配信</button>
           <button style={S.primary} onClick={() => onNew(todayStr(), "10:00")}>+ 配信を追加</button>
         </div>
       </div>
@@ -609,7 +610,7 @@ function CalendarView({ allPosts, weekAnchor, setWeekAnchor, selectedPost, onSel
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // LIST VIEW
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-function ListView({ posts, filterStatus, setFilterStatus, onSelect, onNew, setPosts, onStatusChange }) {
+function ListView({ posts, filterStatus, setFilterStatus, onSelect, onNew, setPosts, onStatusChange, onNewRecurring }) {
   const [searchQ, setSearchQ] = useState("");
   const [period, setPeriod] = useState("upcoming"); // "upcoming" | "past" | "all"
   const filtered = useMemo(() => {
@@ -631,7 +632,10 @@ function ListView({ posts, filterStatus, setFilterStatus, onSelect, onNew, setPo
       <div style={{ padding:"14px 24px 12px", background:"#F8F5FF", borderBottom:"1px solid #E8E2FF", flexShrink:0 }}>
         <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
           <h2 style={{ margin:0, fontSize:17, fontWeight:800, color:"#4B38C8" }}>配信リスト</h2>
-          <button style={S.primary} onClick={onNew}>+ 追加</button>
+          <div style={{ display:"flex", gap:8 }}>
+            <button onClick={onNewRecurring} style={{ ...S.ghost, fontSize:12, fontWeight:700, borderColor:"#C9BCEE", color:"#7C70B8" }}>↻ 定期配信</button>
+            <button style={S.primary} onClick={onNew}>+ 追加</button>
+          </div>
         </div>
         <div style={{ display:"flex", gap:8, alignItems:"center", marginBottom:8 }}>
           <div style={{ flex:1, position:"relative" }}>
@@ -699,7 +703,7 @@ function ListView({ posts, filterStatus, setFilterStatus, onSelect, onNew, setPo
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // EDITOR PANEL
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-function EditorPanel({ post, templates, onSave, onDelete, onClose }) {
+function EditorPanel({ post, templates, onSave, onDelete, onClose, onConvertToRecurring }) {
   const [form, setForm] = useState(post);
   const [tab, setTab] = useState("editor");
   const [tplOpen, setTplOpen] = useState(false);
@@ -885,8 +889,14 @@ function EditorPanel({ post, templates, onSave, onDelete, onClose }) {
         )}
       </div>
 
-      <div style={{ padding:"12px 18px", borderTop:"1px solid #EDE8FF", display:"flex", gap:8, flexShrink:0 }}>
+      <div style={{ padding:"12px 18px", borderTop:"1px solid #EDE8FF", display:"flex", gap:8, flexShrink:0, flexWrap:"wrap" }}>
         <button onClick={() => onSave(form)} style={{ ...S.primary, flex:1, justifyContent:"center" }}>保存</button>
+        {onConvertToRecurring && (
+          <button onClick={() => onConvertToRecurring(form)}
+            style={{ ...S.ghost, fontSize:11, fontWeight:700, color:"#7C3AED", borderColor:"#C4B5FD", padding:"9px 12px", whiteSpace:"nowrap" }}>
+            ↻ 定期配信に変換
+          </button>
+        )}
         <button className="btn-ghost" onClick={() => { if(window.confirm("削除しますか？")) onDelete(form.id); }}
           style={{ ...S.ghost, color:"#EF4444", borderColor:"#FECACA", padding:"9px 14px" }}>削除</button>
       </div>
@@ -1893,6 +1903,44 @@ export default function DelivCast({ initialPosts, initialTemplates, initialRecur
     setSelectedPost({ id: Date.now(), title:"", date, time: time||"10:00", duration:60, status:"draft", platforms:[], tags:[], body:"", note:"", recurringId:null , postTargets:[] });
   };
 
+  const [globalEditRule, setGlobalEditRule] = useState(null);
+
+  const newRecurringRule = () => {
+    setGlobalEditRule({ id:`r${Date.now()}`, title:"", titleTemplate:"", freq:"weekly", weekDay:1, time:"10:00", duration:60, platforms:[], tags:[], active:true, startDate:todayStr(), counter:1, defaultTemplateId:null });
+  };
+
+  const convertToRecurring = (post) => {
+    setGlobalEditRule({
+      id: `r${Date.now()}`,
+      title: post.title,
+      titleTemplate: post.title,
+      freq: "weekly",
+      weekDay: new Date(post.date).getDay(),
+      time: post.time,
+      duration: post.duration,
+      platforms: post.platforms,
+      tags: post.tags,
+      active: true,
+      startDate: post.date,
+      counter: 1,
+      defaultTemplateId: null,
+    });
+  };
+
+  const saveGlobalRule = async (r) => {
+    try {
+      const isNew = !recurringRules.some(x => x.id === r.id);
+      const method = isNew ? "POST" : "PUT";
+      const url    = isNew ? "/api/recurring" : `/api/recurring/${r.id}`;
+      const res    = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(r) });
+      if (!res.ok) throw new Error(await res.text());
+      const saved = await res.json();
+      setRecurringRules(rs => isNew ? [...rs, saved] : rs.map(x => x.id === r.id ? saved : x));
+      setGlobalEditRule(null);
+      showToast("定期スケジュールを保存しました");
+    } catch (e) { showToast("保存に失敗しました"); console.error(e); }
+  };
+
   const handleSelectPost = (p) => {
     setSelectedPost(p);
     if (view !== "calendar") setView("calendar");
@@ -2006,8 +2054,8 @@ export default function DelivCast({ initialPosts, initialTemplates, initialRecur
       {/* MAIN */}
       <div style={{ flex:1, display:"flex", overflow:"hidden", ...(isMobile ? { marginTop:52 } : {}) }}>
         <div style={{ flex:1, overflow:"hidden", display:"flex", flexDirection:"column" }}>
-          {view==="calendar" && <CalendarView allPosts={allPosts} weekAnchor={weekAnchor} setWeekAnchor={setWeekAnchor} selectedPost={selectedPost} onSelect={setSelectedPost} onNew={newPost} />}
-          {view==="list"     && <ListView posts={allPosts} filterStatus={filterStatus} setFilterStatus={setFilterStatus} onSelect={setSelectedPost} onNew={() => newPost(todayStr(),"10:00")} setPosts={setPosts} onStatusChange={upsertPost} />}
+          {view==="calendar" && <CalendarView allPosts={allPosts} weekAnchor={weekAnchor} setWeekAnchor={setWeekAnchor} selectedPost={selectedPost} onSelect={setSelectedPost} onNew={newPost} onNewRecurring={newRecurringRule} />}
+          {view==="list"     && <ListView posts={allPosts} filterStatus={filterStatus} setFilterStatus={setFilterStatus} onSelect={setSelectedPost} onNew={() => newPost(todayStr(),"10:00")} setPosts={setPosts} onStatusChange={upsertPost} onNewRecurring={newRecurringRule} />}
           {view==="template" && <TemplateView templates={templates} setTemplates={setTemplates} showToast={showToast} />}
           {view==="dest"     && <DestView showToast={showToast} />}
           {view==="settings" && <SettingsView recurringRules={recurringRules} setRecurringRules={setRecurringRules} notifSettings={notifSettings} setNotifSettings={setNotifSettings} showToast={showToast} allPosts={allPosts} templates={templates} />}
@@ -2017,10 +2065,69 @@ export default function DelivCast({ initialPosts, initialTemplates, initialRecur
 
         {selectedPost !== null && (
           <div style={isMobile ? { position:"fixed", inset:0, zIndex:60, marginTop:52, display:"flex", flexDirection:"column" } : {}}>
-            <EditorPanel post={selectedPost} templates={templates} onSave={upsertPost} onDelete={deletePost} onClose={() => setSelectedPost(null)} />
+            <EditorPanel post={selectedPost} templates={templates} onSave={upsertPost} onDelete={deletePost} onClose={() => setSelectedPost(null)} onConvertToRecurring={convertToRecurring} />
           </div>
         )}
       </div>
+
+      {globalEditRule && (
+        <div style={{ position:"fixed", inset:0, background:"rgba(15,20,35,0.5)", zIndex:300, display:"flex", alignItems:"center", justifyContent:"center", backdropFilter:"blur(3px)" }}
+          onClick={() => setGlobalEditRule(null)}>
+          <div style={{ background:"#fff", borderRadius:16, padding:28, width:460, maxHeight:"85vh", overflowY:"auto" }} onClick={e => e.stopPropagation()}>
+            <div style={{ display:"flex", justifyContent:"space-between", marginBottom:20 }}>
+              <h3 style={{ margin:0, fontSize:15, fontWeight:800, color:"#4B38C8" }}>定期スケジュール</h3>
+              <button onClick={() => setGlobalEditRule(null)} style={{ ...S.ghost, padding:"4px 8px", border:"none", color:"#C0BCCE" }}>✕</button>
+            </div>
+            <label style={S.label}>表示名</label>
+            <input value={globalEditRule.title} onChange={e => setGlobalEditRule({...globalEditRule,title:e.target.value})} style={{ ...S.input, marginBottom:12 }} placeholder="週刊まとめ動画" />
+            <label style={S.label}>タイトルテンプレート（{"{{n}}"}でカウンター）</label>
+            <input value={globalEditRule.titleTemplate} onChange={e => setGlobalEditRule({...globalEditRule,titleTemplate:e.target.value})} style={{ ...S.input, marginBottom:12 }} placeholder="週刊まとめ動画 #{{n}}" />
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:12 }}>
+              <div>
+                <label style={S.label}>頻度</label>
+                <select value={globalEditRule.freq} onChange={e => setGlobalEditRule({...globalEditRule,freq:e.target.value})} style={S.input}>
+                  <option value="daily">毎日</option>
+                  <option value="weekly">毎週</option>
+                  <option value="biweekly">隔週</option>
+                  <option value="monthly">毎月</option>
+                </select>
+              </div>
+              {globalEditRule.freq==="weekly" && <div>
+                <label style={S.label}>曜日</label>
+                <select value={globalEditRule.weekDay} onChange={e => setGlobalEditRule({...globalEditRule,weekDay:+e.target.value})} style={S.input}>
+                  {["日","月","火","水","木","金","土"].map((d,i) => <option key={i} value={i}>{d}曜日</option>)}
+                </select>
+              </div>}
+              <div>
+                <label style={S.label}>時刻</label>
+                <input type="time" value={globalEditRule.time} onChange={e => setGlobalEditRule({...globalEditRule,time:e.target.value})} style={S.input} />
+              </div>
+              <div>
+                <label style={S.label}>所要時間（分）</label>
+                <input type="number" value={globalEditRule.duration} onChange={e => setGlobalEditRule({...globalEditRule,duration:+e.target.value})} style={S.input} />
+              </div>
+            </div>
+            <label style={S.label}>開始日</label>
+            <input type="date" value={globalEditRule.startDate} onChange={e => setGlobalEditRule({...globalEditRule,startDate:e.target.value})} style={{ ...S.input, marginBottom:12 }} />
+            <div style={{ marginBottom:20 }}>
+              <label style={S.label}>配信先</label>
+              <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+                {PLATFORMS.map(pl => {
+                  const on = globalEditRule.platforms.includes(pl.id);
+                  return <div key={pl.id} onClick={() => setGlobalEditRule({...globalEditRule,platforms:on?globalEditRule.platforms.filter(x=>x!==pl.id):[...globalEditRule.platforms,pl.id]})}
+                    style={{ padding:"4px 10px", borderRadius:6, border:`1.5px solid ${on?pl.color:"#C9BCEE"}`, background:on?`${pl.color}15`:"#fff", color:on?pl.color:"#C0BCCE", fontSize:11, fontWeight:700, cursor:"pointer" }}>
+                    {pl.icon} {pl.name}
+                  </div>;
+                })}
+              </div>
+            </div>
+            <div style={{ display:"flex", gap:8, justifyContent:"flex-end" }}>
+              <button onClick={() => setGlobalEditRule(null)} style={S.ghost}>キャンセル</button>
+              <button onClick={() => saveGlobalRule(globalEditRule)} style={S.primary}>保存する</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {searchOpen && <SearchModal posts={allPosts} templates={templates} onSelectPost={handleSelectPost} onClose={() => setSearchOpen(false)} />}
 
