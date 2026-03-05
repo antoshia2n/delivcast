@@ -240,7 +240,7 @@ function generateRecurringPosts(rules, existingPosts, weeksAhead = 4) {
 
     while (cursor <= endDate) {
       const ds = fmtDate(cursor);
-      if (cursor >= TODAY || ds >= todayStr()) {
+      if (ds >= todayStr()) {
         const alreadyExists = existingPosts.some(p => p.recurringId === rule.id && p.date === ds);
         if (!alreadyExists) {
           const title = rule.titleTemplate.replace("{{n}}", counter);
@@ -613,14 +613,20 @@ function CalendarView({ allPosts, weekAnchor, setWeekAnchor, selectedPost, onSel
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 function ListView({ posts, filterStatus, setFilterStatus, onSelect, onNew, setPosts, onStatusChange }) {
   const [searchQ, setSearchQ] = useState("");
+  const [period, setPeriod] = useState("upcoming"); // "upcoming" | "past" | "all"
   const filtered = useMemo(() => {
     let list = filterStatus === "all" ? posts : posts.filter(p => p.status === filterStatus);
+    if (period === "upcoming") list = list.filter(p => p.date >= todayStr());
+    else if (period === "past") list = list.filter(p => p.date < todayStr());
     if (searchQ.trim()) {
       const lq = searchQ.toLowerCase();
       list = list.filter(p => [p.title, p.body, p.note, ...p.tags].join(" ").toLowerCase().includes(lq));
     }
-    return list.slice().sort((a,b) => a.date.localeCompare(b.date));
-  }, [posts, filterStatus, searchQ]);
+    // 今後は昇順（近い順）、過去は降順（新しい順）
+    return list.slice().sort((a,b) => period === "past"
+      ? b.date.localeCompare(a.date)
+      : a.date.localeCompare(b.date));
+  }, [posts, filterStatus, searchQ, period]);
 
   return (
     <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"hidden" }}>
@@ -629,22 +635,31 @@ function ListView({ posts, filterStatus, setFilterStatus, onSelect, onNew, setPo
           <h2 style={{ margin:0, fontSize:17, fontWeight:800, color:"#4B38C8" }}>配信リスト</h2>
           <button style={S.primary} onClick={onNew}>+ 追加</button>
         </div>
-        <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+        <div style={{ display:"flex", gap:8, alignItems:"center", marginBottom:8 }}>
           <div style={{ flex:1, position:"relative" }}>
             <span style={{ position:"absolute", left:10, top:"50%", transform:"translateY(-50%)", fontSize:14, color:"#7A9AB5" }}>⌕</span>
             <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="リスト内を検索..."
               style={{ ...S.input, paddingLeft:32, fontSize:12 }} />
           </div>
           <div style={{ display:"flex", background:"#E9DFFE", borderRadius:8, padding:2, gap:1, flexShrink:0 }}>
-            {[{id:"all",label:"すべて",color:"#4B38C8"}, ...STATUSES].map(s => (
-              <button key={s.id} onClick={() => setFilterStatus(s.id)}
+            {[{id:"upcoming",label:"今後"},{id:"past",label:"過去"},{id:"all",label:"すべて"}].map(p => (
+              <button key={p.id} onClick={() => setPeriod(p.id)}
                 style={{ padding:"5px 10px", borderRadius:6, border:"none", fontSize:11, fontWeight:700, cursor:"pointer",
-                  background:filterStatus===s.id?"#fff":"transparent", color:filterStatus===s.id?(s.color||"#4B38C8"):"#C0BCCE",
-                  boxShadow:filterStatus===s.id?"0 1px 3px rgba(0,0,0,0.12)":"none" }}>
-                {s.label}
+                  background:period===p.id?"#fff":"transparent", color:period===p.id?"#4B38C8":"#C0BCCE",
+                  boxShadow:period===p.id?"0 1px 3px rgba(0,0,0,0.12)":"none" }}>
+                {p.label}
               </button>
             ))}
           </div>
+        </div>
+        <div style={{ display:"flex", gap:8, overflowX:"auto", paddingBottom:2 }}>
+          {[{id:"all",label:"すべて",color:"#4B38C8"}, ...STATUSES].map(s => (
+            <button key={s.id} onClick={() => setFilterStatus(s.id)}
+              style={{ padding:"5px 10px", borderRadius:6, border:"none", fontSize:11, fontWeight:700, cursor:"pointer", flexShrink:0,
+                background:filterStatus===s.id?"#4B38C8":"#E9DFFE", color:filterStatus===s.id?"#fff":"#C0BCCE" }}>
+              {s.label}
+            </button>
+          ))}
         </div>
       </div>
 
