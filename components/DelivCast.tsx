@@ -721,6 +721,7 @@ function EditorPanel({ post, templates, onSave, onDelete, onClose, onConvertToRe
   const filteredTpls = useMemo(() => filterTemplates(templates, tplSearch), [templates, tplSearch]);
   const tplSearchRef = useRef(null);
   const [copied, setCopied] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const textareaRef = useRef(null);
   useEffect(() => {
     let f = { ...post };
@@ -838,8 +839,8 @@ function EditorPanel({ post, templates, onSave, onDelete, onClose, onConvertToRe
                 style={{ ...S.input, fontSize:12, minHeight:72, resize:"vertical", lineHeight:1.7 }} />
             </div>
             <div>
-              <label style={S.label}>✅ 配信先チェック</label>
-              <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
+              <label style={S.label}>✅ 配信先チェック（タップで選択）</label>
+              <div style={{ display:"flex", flexWrap:"wrap", gap:5 }}>
                 {TARGETS.map(tg => {
                   const entry = (form.postTargets||[]).find(x => x.targetId === tg.id);
                   const isOn = !!entry;
@@ -849,13 +850,12 @@ function EditorPanel({ post, templates, onSave, onDelete, onClose, onConvertToRe
                         const cur = form.postTargets||[];
                         set("postTargets", isOn ? cur.filter(x=>x.targetId!==tg.id) : [...cur,{targetId:tg.id,url:""}]);
                       }}
-                      style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 10px", borderRadius:8, border:`1.5px solid ${isOn?tg.color:"#E0D8FF"}`, background:isOn?`${tg.color}08`:"#FAFCFF", cursor:"pointer", transition:"all 0.12s" }}>
-                      <div style={{ width:18, height:18, borderRadius:5, border:`2px solid ${isOn?tg.color:"#C9BCEE"}`, background:isOn?tg.color:"#fff", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0, transition:"all 0.12s" }}>
-                        {isOn && <span style={{ color:"#fff", fontSize:11, fontWeight:900, lineHeight:1 }}>✓</span>}
+                      style={{ display:"inline-flex", alignItems:"center", gap:5, padding:"5px 10px", borderRadius:20, border:`1.5px solid ${isOn?tg.color:"#D4C8F4"}`, background:isOn?`${tg.color}15`:"#fff", cursor:"pointer", transition:"all 0.12s" }}>
+                      <div style={{ width:14, height:14, borderRadius:3, border:`2px solid ${isOn?tg.color:"#C9BCEE"}`, background:isOn?tg.color:"#fff", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+                        {isOn && <span style={{ color:"#fff", fontSize:9, fontWeight:900, lineHeight:1 }}>✓</span>}
                       </div>
-                      <span style={{ fontSize:12, fontWeight:700, color:isOn?tg.color:"#6B5EA8", flex:1 }}>{tg.icon} {tg.name}</span>
-                      {isOn && entry.url && <a href={entry.url} target="_blank" rel="noopener noreferrer" onClick={e=>e.stopPropagation()} style={{ fontSize:10, color:tg.color, fontWeight:700, textDecoration:"none", background:`${tg.color}15`, padding:"2px 7px", borderRadius:4 }}>開く↗</a>}
-                      {isOn && !entry.url && <span style={{ fontSize:10, color:"#C0BCCE" }}>URL未設定</span>}
+                      <span style={{ fontSize:11, fontWeight:700, color:isOn?tg.color:"#6B5EA8", whiteSpace:"nowrap" }}>{tg.icon} {tg.name}</span>
+                      {isOn && entry.url && <a href={entry.url} target="_blank" rel="noopener noreferrer" onClick={e=>e.stopPropagation()} style={{ fontSize:10, color:tg.color, fontWeight:700, textDecoration:"none" }}>↗</a>}
                     </div>
                   );
                 })}
@@ -936,16 +936,23 @@ function EditorPanel({ post, templates, onSave, onDelete, onClose, onConvertToRe
         )}
       </div>
 
-      <div style={{ padding:"12px 18px", borderTop:"1px solid #EDE8FF", display:"flex", gap:8, flexShrink:0, flexWrap:"wrap" }}>
-        <button onClick={() => onSave(form)} style={{ ...S.primary, flex:1, justifyContent:"center" }}>保存</button>
-        {onConvertToRecurring && (
-          <button onClick={() => onConvertToRecurring(form)}
-            style={{ ...S.ghost, fontSize:11, fontWeight:700, color:"#7C3AED", borderColor:"#C4B5FD", padding:"9px 12px", whiteSpace:"nowrap" }}>
-            ↻ 定期配信に変換
-          </button>
-        )}
-        <button className="btn-ghost" onClick={() => { if(window.confirm("削除しますか？")) onDelete(form.id); }}
-          style={{ ...S.ghost, color:"#EF4444", borderColor:"#FECACA", padding:"9px 14px" }}>削除</button>
+      <div style={{ padding:"10px 14px", borderTop:"1px solid #EDE8FF", display:"flex", flexDirection:"column", gap:6, flexShrink:0 }}>
+        <button
+          onClick={async () => { setIsSaving(true); await onSave(form); setIsSaving(false); }}
+          disabled={isSaving}
+          style={{ ...S.primary, justifyContent:"center", opacity:isSaving?0.75:1, transition:"opacity 0.2s" }}>
+          {isSaving ? "⏳ 保存中..." : "保存"}
+        </button>
+        <div style={{ display:"flex", gap:6 }}>
+          {onConvertToRecurring && (
+            <button onClick={() => onConvertToRecurring(form)}
+              style={{ ...S.ghost, fontSize:11, fontWeight:700, color:"#7C3AED", borderColor:"#C4B5FD", padding:"7px 10px", whiteSpace:"nowrap", flex:1, justifyContent:"center", display:"flex" }}>
+              ↻ 定期配信に変換
+            </button>
+          )}
+          <button className="btn-ghost" onClick={() => { if(window.confirm("削除しますか？")) onDelete(form.id); }}
+            style={{ ...S.ghost, color:"#EF4444", borderColor:"#FECACA", padding:"7px 12px" }}>削除</button>
+        </div>
       </div>
     </div>
   );
