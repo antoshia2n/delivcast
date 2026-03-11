@@ -254,11 +254,21 @@ function generateRecurringPosts(rules, existingPosts, weeksAhead = 4) {
       else if (rule.freq === "daily")    cursor.setDate(cursor.getDate() + 1);
       else if (rule.freq === "biweekly") cursor.setDate(cursor.getDate() + 14);
       else if (rule.freq === "monthly") {
-        const targetDay = rule.monthDay || cursor.getDate();
         cursor.setMonth(cursor.getMonth() + 1);
-        // clamp to valid day (e.g. 31 → end of month)
-        const maxDay = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0).getDate();
-        cursor.setDate(Math.min(targetDay, maxDay));
+        if (rule.monthlyType === "weekday") {
+          // 第N曜日モード（例：第1土曜）
+          const week = rule.weekOfMonth || 1;
+          const dow  = rule.weekDay ?? 6;
+          const first = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
+          let offset = (dow - first.getDay() + 7) % 7;
+          offset += (week - 1) * 7;
+          cursor.setDate(1 + offset);
+        } else {
+          // 毎月X日モード
+          const targetDay = rule.monthDay || 1;
+          const maxDay = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0).getDate();
+          cursor.setDate(Math.min(targetDay, maxDay));
+        }
       }
       else break;
     }
@@ -703,13 +713,14 @@ function ListView({ posts, filterStatus, setFilterStatus, onSelect, onNew, setPo
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // EDITOR PANEL
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-function EditorPanel({ post, templates, onSave, onDelete, onClose, onConvertToRecurring }) {
+function EditorPanel({ post, templates, onSave, onDelete, onClose, onConvertToRecurring, onSaveAsTemplate }) {
   const [form, setForm] = useState(post);
   const [tab, setTab] = useState("editor");
   const [tplOpen, setTplOpen] = useState(false);
   const [tplSearch, setTplSearch] = useState("");
   const filteredTpls = useMemo(() => filterTemplates(templates, tplSearch), [templates, tplSearch]);
   const tplSearchRef = useRef(null);
+  const [copied, setCopied] = useState(false);
   const textareaRef = useRef(null);
   useEffect(() => {
     let f = { ...post };
@@ -770,6 +781,16 @@ function EditorPanel({ post, templates, onSave, onDelete, onClose, onConvertToRe
                 </button>
               ))}
               <div style={{ flex:1 }} />
+              <button className="toolbar-btn" onClick={() => { navigator.clipboard.writeText(form.body); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
+                style={{ padding:"4px 10px", border:"1px solid #D8D0F8", borderRadius:5, background:copied?"#DCFCE7":"#fff", fontSize:11, fontWeight:700, cursor:"pointer", color:copied?"#059669":"#7C74A8", transition:"all 0.2s" }}>
+                {copied ? "✓ コピー済" : "コピー"}
+              </button>
+              {onSaveAsTemplate && (
+                <button className="toolbar-btn" onClick={() => onSaveAsTemplate(form)}
+                  style={{ padding:"4px 10px", border:"1px solid #D8D0F8", borderRadius:5, background:"#fff", fontSize:11, fontWeight:700, cursor:"pointer", color:"#059669" }}>
+                  ＋ テンプレ保存
+                </button>
+              )}
               <button className="toolbar-btn" onClick={() => { setTplOpen(v => !v); setTplSearch(""); setTimeout(() => tplSearchRef.current && tplSearchRef.current.focus(), 60); }}
                 style={{ padding:"4px 10px", border:"1px solid #D8D0F8", borderRadius:5, background:tplOpen?"#EDE6FF":"#fff", fontSize:11, fontWeight:700, cursor:"pointer", color:tplOpen?"#6D4EE8":"#7C74A8" }}>
                 テンプレ挿入 {tplOpen ? "▲" : "▼"}
@@ -811,9 +832,35 @@ function EditorPanel({ post, templates, onSave, onDelete, onClose, onConvertToRe
             <textarea ref={textareaRef} value={form.body} onChange={e => set("body", e.target.value)}
               placeholder={"配信の内容、説明文、スクリプトを書く...\n\n**太字** _斜体_ # 見出し"}
               style={{ ...S.input, minHeight:220, resize:"vertical", borderRadius:tplOpen?"0 0 8px 8px":"0 0 8px 8px", borderTop:"none", lineHeight:1.8, marginBottom:12 }} />
-            <div>
+            <div style={{ marginBottom:12 }}>
               <label style={S.label}>📝 メモ（内部用）</label>
-              <input value={form.note} onChange={e => set("note", e.target.value)} placeholder="備考・メモ" style={{ ...S.input, fontSize:12 }} />
+              <textarea value={form.note} onChange={e => set("note", e.target.value)} placeholder="備考・メモ（改行OK）"
+                style={{ ...S.input, fontSize:12, minHeight:72, resize:"vertical", lineHeight:1.7 }} />
+            </div>
+            <div>
+              <label style={S.label}>✅ 配信先チェック</label>
+              <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
+                {TARGETS.map(tg => {
+                  const entry = (form.postTargets||[]).find(x => x.targetId === tg.id);
+                  const isOn = !!entry;
+                  return (
+                    <div key={tg.id}
+                      onClick={() => {
+                        const cur = form.postTargets||[];
+                        set("postTargets", isOn ? cur.filter(x=>x.targetId!==tg.id) : [...cur,{targetId:tg.id,url:""}]);
+                      }}
+                      style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 10px", borderRadius:8, border:`1.5px solid ${isOn?tg.color:"#E0D8FF"}`, background:isOn?`${tg.color}08`:"#FAFCFF", cursor:"pointer", transition:"all 0.12s" }}>
+                      <div style={{ width:18, height:18, borderRadius:5, border:`2px solid ${isOn?tg.color:"#C9BCEE"}`, background:isOn?tg.color:"#fff", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0, transition:"all 0.12s" }}>
+                        {isOn && <span style={{ color:"#fff", fontSize:11, fontWeight:900, lineHeight:1 }}>✓</span>}
+                      </div>
+                      <span style={{ fontSize:12, fontWeight:700, color:isOn?tg.color:"#6B5EA8", flex:1 }}>{tg.icon} {tg.name}</span>
+                      {isOn && entry.url && <a href={entry.url} target="_blank" rel="noopener noreferrer" onClick={e=>e.stopPropagation()} style={{ fontSize:10, color:tg.color, fontWeight:700, textDecoration:"none", background:`${tg.color}15`, padding:"2px 7px", borderRadius:4 }}>開く↗</a>}
+                      {isOn && !entry.url && <span style={{ fontSize:10, color:"#C0BCCE" }}>URL未設定</span>}
+                    </div>
+                  );
+                })}
+              </div>
+              <p style={{ margin:"6px 0 0", fontSize:10, color:"#C0BCCE" }}>URLは「設定タブ」から入力できます</p>
             </div>
           </>
         ) : (
@@ -1187,7 +1234,7 @@ function SummaryEmailModal({ posts, onClose }) {
 function SettingsView({ recurringRules, setRecurringRules, notifSettings, setNotifSettings, showToast, allPosts, templates }) {
   const [editRule, setEditRule] = useState(null);
   const [emailPreviewOpen, setEmailPreviewOpen] = useState(false);
-  const FREQ_LABELS = { daily:"毎日", weekly:"毎週", biweekly:"隔週", monthly:"毎月" };
+  const FREQ_LABELS = { daily:"毎日", weekly:"毎週", biweekly:"隔週", monthly:"毎月（日付）", monthly_weekday:"毎月（曜日）" };
 
   const saveRule = async (r) => {
     try {
@@ -1296,10 +1343,25 @@ function SettingsView({ recurringRules, setRecurringRules, notifSettings, setNot
                 </select>
               </div>}
               {editRule.freq==="monthly"&&<div>
-                <label style={S.label}>毎月何日</label>
-                <select value={editRule.monthDay||1} onChange={e => setEditRule({...editRule,monthDay:+e.target.value})} style={S.input}>
-                  {Array.from({length:31},(_,i)=>i+1).map(d=><option key={d} value={d}>{d}日</option>)}
+                <label style={S.label}>毎月の設定</label>
+                <select value={editRule.monthlyType||"date"} onChange={e => setEditRule({...editRule,monthlyType:e.target.value})} style={{ ...S.input, marginBottom:6 }}>
+                  <option value="date">日付指定（例：毎月15日）</option>
+                  <option value="weekday">曜日指定（例：第1土曜）</option>
                 </select>
+                {(!editRule.monthlyType || editRule.monthlyType==="date") ? (
+                  <select value={editRule.monthDay||1} onChange={e => setEditRule({...editRule,monthDay:+e.target.value})} style={S.input}>
+                    {Array.from({length:31},(_,i)=>i+1).map(d=><option key={d} value={d}>{d}日</option>)}
+                  </select>
+                ) : (
+                  <div style={{ display:"flex", gap:6 }}>
+                    <select value={editRule.weekOfMonth||1} onChange={e => setEditRule({...editRule,weekOfMonth:+e.target.value})} style={{ ...S.input, flex:1 }}>
+                      {[1,2,3,4].map(n=><option key={n} value={n}>第{n}</option>)}
+                    </select>
+                    <select value={editRule.weekDay??6} onChange={e => setEditRule({...editRule,weekDay:+e.target.value})} style={{ ...S.input, flex:1 }}>
+                      {["日","月","火","水","木","金","土"].map((d,i)=><option key={i} value={i}>{d}曜日</option>)}
+                    </select>
+                  </div>
+                )}
               </div>}
               <div>
                 <label style={S.label}>時刻</label>
@@ -1909,6 +1971,17 @@ export default function DelivCast({ initialPosts, initialTemplates, initialRecur
     setGlobalEditRule({ id:`r${Date.now()}`, title:"", titleTemplate:"", freq:"weekly", weekDay:1, time:"10:00", duration:60, platforms:[], tags:[], active:true, startDate:todayStr(), counter:1, defaultTemplateId:null });
   };
 
+  const saveAsTemplate = async (post) => {
+    const tpl = { title: post.title || "新規テンプレート", folder: "投稿から保存", tags: post.tags ?? [], body: post.body || "" };
+    try {
+      const res = await fetch("/api/templates", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(tpl) });
+      if (!res.ok) throw new Error(await res.text());
+      const saved = await res.json();
+      setTemplates(ts => [...ts, saved]);
+      showToast("テンプレートとして保存しました");
+    } catch (e) { showToast("保存に失敗しました"); console.error(e); }
+  };
+
   const convertToRecurring = (post) => {
     setGlobalEditRule({
       id: `r${Date.now()}`,
@@ -2065,7 +2138,7 @@ export default function DelivCast({ initialPosts, initialTemplates, initialRecur
 
         {selectedPost !== null && (
           <div style={isMobile ? { position:"fixed", inset:0, zIndex:60, marginTop:52, display:"flex", flexDirection:"column" } : {}}>
-            <EditorPanel post={selectedPost} templates={templates} onSave={upsertPost} onDelete={deletePost} onClose={() => setSelectedPost(null)} onConvertToRecurring={convertToRecurring} />
+            <EditorPanel post={selectedPost} templates={templates} onSave={upsertPost} onDelete={deletePost} onClose={() => setSelectedPost(null)} onConvertToRecurring={convertToRecurring} onSaveAsTemplate={saveAsTemplate} />
           </div>
         )}
       </div>
