@@ -49,13 +49,19 @@ const DAYS_JP = ["日", "月", "火", "水", "木", "金", "土"];
 const TODAY = new Date();
 function fmtDate(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
 function todayStr() { return fmtDate(TODAY); }
+// YYYY-MM-DD をローカル時間でパース（UTCズレ防止）
+function parseLocalDate(dateStr) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
 function getWeekDates(anchor) {
-  const d = new Date(anchor), day = d.getDay();
+  const d = anchor instanceof Date ? anchor : parseLocalDate(anchor);
+  const day = d.getDay();
   const mon = new Date(d); mon.setDate(d.getDate() - ((day + 6) % 7));
   return Array.from({ length: 7 }, (_, i) => { const x = new Date(mon); x.setDate(mon.getDate() + i); return x; });
 }
 function addDays(dateStr, n) {
-  const d = new Date(dateStr); d.setDate(d.getDate() + n); return fmtDate(d);
+  const d = parseLocalDate(dateStr); d.setDate(d.getDate() + n); return fmtDate(d);
 }
 
 // (seed data removed — loaded from Supabase)
@@ -234,7 +240,7 @@ function generateRecurringPosts(rules, existingPosts, weeksAhead = 4) {
   endDate.setDate(endDate.getDate() + weeksAhead * 7);
 
   rules.filter(r => r.active).forEach(rule => {
-    const start = new Date(rule.startDate);
+    const start = parseLocalDate(rule.startDate);
     const cursor = new Date(start);
     let counter = rule.counter;
 
@@ -547,18 +553,35 @@ function CalendarView({ allPosts, weekAnchor, setWeekAnchor, selectedPost, onSel
                   </div>
                 )}
 
-                {dayPosts.map((p, pi) => {
+                {(() => {
+                  // 被り検出: 同時刻ブロックを横分割
+                  const groups = {};
+                  dayPosts.forEach(p => {
+                    const top = timeToTop(p.time || "09:00");
+                    const key = Math.round(top / 4) * 4; // 4px単位でグループ化
+                    if (!groups[key]) groups[key] = [];
+                    groups[key].push(p);
+                  });
+                  return dayPosts.map((p, pi) => {
                   const top = timeToTop(p.time || "09:00");
                   const height = Math.max((p.duration || 60)/60*SLOT_H, 28);
                   const s = STATUSES.find(x => x.id === p.status) || STATUSES[0];
                   const isSelected = selectedPost?.id === p.id;
                   const isRecurring = !!p.recurringId;
+                  const topKey = Math.round(top / 4) * 4;
+                  const siblings = groups[topKey] || [p];
+                  const sibIdx = siblings.findIndex(x => x.id === p.id);
+                  const sibCount = siblings.length;
+                  const colW = sibCount > 1 ? `calc((100% - 8px) / ${sibCount})` : undefined;
+                  const colL = sibCount > 1 ? `calc(4px + ${sibIdx} * (100% - 8px) / ${sibCount})` : undefined;
 
                   return (
                     <div key={p.id}
                       onClick={e => { e.stopPropagation(); onSelect(p); }}
                       style={{
-                        position:"absolute", top, left:4, right:4, height,
+                        position:"absolute", top,
+                        left: colL ?? 4, right: colL ? undefined : 4,
+                        width: colW, height,
                         borderRadius:8,
                         background:isSelected ? s.color : `${s.color}20`,
                         border:`1.5px solid ${isSelected?s.color:s.color+"60"}`,
@@ -607,7 +630,9 @@ function CalendarView({ allPosts, weekAnchor, setWeekAnchor, selectedPost, onSel
                       )}
                     </div>
                   );
-                })}
+                  );
+                });
+                })()}
               </div>
             );
           })}
@@ -733,7 +758,9 @@ function EditorPanel({ post, templates, onSave, onDelete, onClose, onConvertToRe
     setTab("editor");
     setTplOpen(false);
     setTplSearch("");
-  }, [post.id, templates]);
+  // templatesをdepsから除外 → templates変更時に内容がリセットされるのを防ぐ
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [post.id]);
   const set = (k, v) => setForm(f => ({...f, [k]: v}));
 
   const insertFormat = (before, after="") => {
