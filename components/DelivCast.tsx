@@ -630,7 +630,6 @@ function CalendarView({ allPosts, weekAnchor, setWeekAnchor, selectedPost, onSel
                       )}
                     </div>
                   );
-                  );
                 });
                 })()}
               </div>
