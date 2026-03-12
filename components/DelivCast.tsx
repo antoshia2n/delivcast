@@ -46,9 +46,8 @@ const NAV_ITEMS = [
 ];
 
 const DAYS_JP = ["日", "月", "火", "水", "木", "金", "土"];
-const TODAY = new Date();
 function fmtDate(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
-function todayStr() { return fmtDate(TODAY); }
+function todayStr() { return fmtDate(new Date()); }  // 毎回現在日時を取得
 // YYYY-MM-DD をローカル時間でパース（UTCズレ防止）
 function parseLocalDate(dateStr) {
   const [y, m, d] = dateStr.split("-").map(Number);
@@ -236,7 +235,7 @@ function highlightTitle(title, q) {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 function generateRecurringPosts(rules, existingPosts, weeksAhead = 4) {
   const generated = [];
-  const endDate = new Date(TODAY);
+  const endDate = new Date();
   endDate.setDate(endDate.getDate() + weeksAhead * 7);
 
   rules.filter(r => r.active).forEach(rule => {
@@ -476,7 +475,7 @@ function CalendarView({ allPosts, weekAnchor, setWeekAnchor, selectedPost, onSel
   const weekDates = getWeekDates(weekAnchor);
   const HOURS = Array.from({ length: 24 }, (_, i) => i);
   const SLOT_H = 60;
-  const NOW_H = 14, NOW_M = 30;
+  const _now = new Date(); const NOW_H = _now.getHours(), NOW_M = _now.getMinutes();
 
   useEffect(() => { if (calRef.current) calRef.current.scrollTop = 7 * SLOT_H; }, []);
 
