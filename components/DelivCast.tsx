@@ -769,7 +769,7 @@ function EditorPanel({ post, templates, onSave, onDelete, onClose, onConvertToRe
   };
 
   return (
-    <div style={{ width:400, background:"#fff", borderLeft:"1px solid #E8E2FF", display:"flex", flexDirection:"column", flexShrink:0, overflow:"hidden", animation:"slideIn 0.18s ease" }}>
+    <div style={{ width:400, height:"100%", background:"#fff", borderLeft:"1px solid #E8E2FF", display:"flex", flexDirection:"column", flexShrink:0, overflow:"hidden", animation:"slideIn 0.18s ease" }}>
       <div style={{ padding:"13px 18px", borderBottom:"1px solid #EDE8FF", display:"flex", alignItems:"center", justifyContent:"space-between", flexShrink:0 }}>
         <div style={{ display:"flex", gap:2, background:"#E9DFFE", borderRadius:8, padding:2 }}>
           {[["editor","エディタ"],["meta","設定"]].map(([id,label]) => (
@@ -2169,7 +2169,9 @@ export default function DelivCast({ initialPosts, initialTemplates, initialRecur
         </div>
 
         {selectedPost !== null && (
-          <div style={isMobile ? { position:"fixed", inset:0, zIndex:60, marginTop:52, display:"flex", flexDirection:"column" } : {}}>
+          <div style={isMobile
+            ? { position:"fixed", inset:0, zIndex:60, marginTop:52, display:"flex", flexDirection:"column" }
+            : { height:"100%", display:"flex", flexDirection:"column", flexShrink:0 }}>
             <EditorPanel post={selectedPost} templates={templates} onSave={upsertPost} onDelete={deletePost} onClose={() => setSelectedPost(null)} onConvertToRecurring={convertToRecurring} onSaveAsTemplate={saveAsTemplate} />
           </div>
         )}
