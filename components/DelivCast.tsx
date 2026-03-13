@@ -1,464 +1,726 @@
-// @ts-nocheck
-"use client"
-import { useState, useRef, useEffect, useCallback, useMemo } from "react"
-import type { Post, Template, RecurringRule } from "@/lib/types"
+import React, { useState, useRef, useEffect } from "react";
+import { supabase } from "./supabase.js";
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// CONSTANTS
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-const STATUSES = [
-  { id: "draft",     label: "準備中",   color: "#7A9AB5" },
-  { id: "wip",       label: "作成中",   color: "#D97706" },
-  { id: "done",      label: "作成済み", color: "#2563EB" },
-  { id: "scheduled", label: "予約済み", color: "#7C3AED" },
-  { id: "live",      label: "公開済み", color: "#059669" },
-];
+// ── 定数 ──────────────────────────────────────────────
+const POST_TYPE = {
+  x_post:    { label:"Xポスト",  color:"#1d9bf0", bg:"#e8f5fe", border:"#93d3fc", dot:"#1d9bf0" },
+  x_quote:   { label:"X引用",   color:"#0ea5e9", bg:"#e0f2fe", border:"#7dd3fc", dot:"#0ea5e9" },
+  x_article: { label:"X記事",   color:"#2563eb", bg:"#dbeafe", border:"#93c5fd", dot:"#2563eb" },
+  note:      { label:"note",   color:"#41c9b4", bg:"#d1faf5", border:"#6ee7da", dot:"#41c9b4" },
+  membership:{ label:"メンシプ", color:"#8b5cf6", bg:"#ede9fe", border:"#c4b5fd", dot:"#8b5cf6" },
+  paid:      { label:"有料",    color:"#f59e0b", bg:"#fef3c7", border:"#fcd34d", dot:"#f59e0b" },
+  other:     { label:"その他",  color:"#6b7280", bg:"#f3f4f6", border:"#d1d5db", dot:"#9ca3af" },
+};
+const STATUS = {
+  draft:     { label:"下書き",      chip:"#f3f4f6", text:"#6b7280", border:"#d1d5db" },
+  review:    { label:"レビュー待ち", chip:"#fef3c7", text:"#d97706", border:"#fcd34d" },
+  waiting:   { label:"予約待ち",    chip:"#dbeafe", text:"#2563eb", border:"#93c5fd" },
+  reserved:  { label:"予約済み",    chip:"#ede9fe", text:"#7c3aed", border:"#c4b5fd" },
+  published: { label:"公開済",      chip:"#d1fae5", text:"#059669", border:"#6ee7b7" },
+  popular:   { label:"好評",        chip:"#ffedd5", text:"#ea580c", border:"#fdba74" },
+  flop:      { label:"不評",        chip:"#fee2e2", text:"#dc2626", border:"#fca5a5" },
+};
+const DAYS   = ["月","火","水","木","金","土","日"];
+const HOURS  = Array.from({length:24},(_,i)=>i);
+const COLORS = ["#f59e0b","#3b82f6","#10b981","#ef4444","#8b5cf6","#ec4899","#14b8a6","#f97316"];
+const XFONT  = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
+const STORAGE_BUCKET = "contentos"; // Supabase Storageバケット名
+// 通知対象：予約済みのまま過ぎた投稿を検出するステータス
+const OVERDUE_STATUS = "reserved";
 
-const PLATFORMS = [
-  { id: "yt",        name: "YouTube",          color: "#FF4444", icon: "▶", short: "YT" },
-  { id: "tw",        name: "Twitter/X",         color: "#1D9BF0", icon: "𝕏", short: "TW" },
-  { id: "tt",        name: "TikTok",            color: "#69C9D0", icon: "♪", short: "TT" },
-  { id: "ig",        name: "Instagram",         color: "#E1306C", icon: "◈", short: "IG" },
-  { id: "shorts",    name: "YT Shorts",         color: "#FF6B35", icon: "▷", short: "SH" },
-  { id: "community", name: "Community",         color: "#7C3AED", icon: "◆", short: "CO" },
-];
+// ⑦ レンダー内で再生成されないようモジュールレベルで定義
+const IMG_SIZES_OPTS=[["small","小 (25%)"],["medium","中 (50%)"],["large","大 (75%)"],["full","全幅"]];
+const IMG_ALIGNS_OPTS=[["left","左"],["center","中央"],["right","右"]];
+const REPOST_REPEATS=[["none","繰り返しなし"],["weekly","毎週"],["biweekly","隔週"],["monthly","毎月"],["bimonthly","2ヶ月ごと"],["quarterly","3ヶ月ごと"]];
+const SLOT_DOWS=[[1,"月"],[2,"火"],[3,"水"],[4,"木"],[5,"金"],[6,"土"],[7,"日"]];
+const SLOT_NTHS=[[1,"第1"],[2,"第2"],[3,"第3"],[4,"第4"]];
+const SLOT_TYPES=[["weekly","毎週"],["daily","毎日"],["nth_weekday","第N曜日"]];
+const TOOLBAR_BLOCK_LABELS={"p":"本文","h1":"見出し","h2":"小見出し","blockquote":"引用","li":"リスト"};
 
-
-// 配信管理対象
-const TARGETS = [
-  { id: "shia",     name: "しあらぼ", color: "#EC4899", icon: "✦" },
-  { id: "raica",    name: "ライカレ", color: "#10B981", icon: "◈" },
-  { id: "yuru",     name: "ゆるラボ", color: "#3B82F6", icon: "◎" },
-  { id: "note",     name: "note",    color: "#41C9B0", icon: "n" },
-  { id: "x",        name: "X",       color: "#1D9BF0", icon: "𝕏" },
-  { id: "line",     name: "LINE",    color: "#06C755", icon: "L" },
-  { id: "merumaga", name: "メルマガ", color: "#F59E0B", icon: "✉" },
-  { id: "other",    name: "その他",  color: "#94A3B8", icon: "…" },
-];
-const NAV_ITEMS = [
-  { id: "calendar", label: "週間カレンダー", icon: "◫" },
-  { id: "list",     label: "配信リスト",    icon: "≡"  },
-  { id: "template", label: "テンプレート",  icon: "⊞"  },
-  { id: "dest",     label: "配信先",       icon: "◉"  },
-  { id: "settings", label: "設定",         icon: "⚙"  },
-  { id: "setup",    label: "データ連携",      icon: "⬡"  },
-  { id: "help",     label: "マニュアル",    icon: "?"   },
-];
-
-const DAYS_JP = ["日", "月", "火", "水", "木", "金", "土"];
-function fmtDate(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
-function todayStr() { return fmtDate(new Date()); }  // 毎回現在日時を取得
-// YYYY-MM-DD をローカル時間でパース（UTCズレ防止）
-function parseLocalDate(dateStr) {
-  const [y, m, d] = dateStr.split("-").map(Number);
-  return new Date(y, m - 1, d);
+function fmtDate(d){return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;}
+function fmtTime(s){return s?s.slice(11,16):"";}
+function genId(){return typeof crypto!=="undefined"&&crypto.randomUUID?parseInt(crypto.randomUUID().replace(/-/g,"").slice(0,15),16):Date.now()+Math.floor(Math.random()*10000);}
+function nowStr(){return new Date().toISOString();}
+function stripHtml(h){return (h||"").replace(/<[^>]+>/g,"");}
+function isUrl(s){try{new URL(s);return s.startsWith("http");}catch{return false;}}
+function nextDaySameTime(dt){
+  const d=new Date(dt.length===16?dt+":00":dt);
+  d.setDate(d.getDate()+1);
+  return fmtDate(d)+"T"+dt.slice(11,16);
 }
-function getWeekDates(anchor) {
-  const d = anchor instanceof Date ? anchor : parseLocalDate(anchor);
-  const day = d.getDay();
-  const mon = new Date(d); mon.setDate(d.getDate() - ((day + 6) % 7));
-  return Array.from({ length: 7 }, (_, i) => { const x = new Date(mon); x.setDate(mon.getDate() + i); return x; });
+function getWeekDates(base){
+  const d=new Date(base),day=d.getDay(),mon=new Date(d);
+  mon.setDate(d.getDate()+(day===0?-6:1-day));
+  return Array.from({length:7},(_,i)=>{const x=new Date(mon);x.setDate(mon.getDate()+i);return x;});
 }
-function addDays(dateStr, n) {
-  const d = parseLocalDate(dateStr); d.setDate(d.getDate() + n); return fmtDate(d);
+function dbToPost(p){
+  const rawLinks=p.memo_links||[];
+  return{...p,
+    postType:p.post_type||"x_post",
+    comments:p.comments||[],
+    body:p.body||"",
+    memo:p.memo||"",
+    memoLinks:rawLinks.map(l=>typeof l==="string"?{label:"",url:l}:l),
+    history:p.history||[],
+  };
+}
+function getUrlParams(){
+  if(typeof window==="undefined")return{isClient:false,accountId:null};
+  const p=new URLSearchParams(window.location.search);
+  const accId=p.get("account");
+  return{isClient:!!accId,accountId:accId};
 }
 
-// (seed data removed — loaded from Supabase)
+// ════════════════════════════════════════════════════════
+// WYSIWYG
+// ════════════════════════════════════════════════════════
+function BodyEditor({value,onChange,editorRef}){
+  const isComposing=useRef(false),internal=useRef(false);
+  useEffect(()=>{
+    if(!editorRef.current||internal.current){internal.current=false;return;}
+    if(editorRef.current.innerHTML!==(value||""))editorRef.current.innerHTML=value||"";
+  },[value]);
+  const emit=()=>{if(!editorRef.current)return;internal.current=true;onChange(editorRef.current.innerHTML);};
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// SHARED STYLES
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-const S = {
-  primary: { background:"#6D4EE8", color:"#fff", border:"none", borderRadius:8, padding:"9px 16px", fontSize:13, fontWeight:700, cursor:"pointer", display:"inline-flex", alignItems:"center", gap:5, whiteSpace:"nowrap", letterSpacing:"-0.01em" },
-  ghost:   { background:"transparent", border:"1px solid #D8D0F8", borderRadius:8, color:"#C0BCCE", padding:"7px 12px", fontSize:13, cursor:"pointer", display:"inline-flex", alignItems:"center" },
-  input:   { width:"100%", border:"1px solid #D8D0F8", borderRadius:8, padding:"9px 12px", fontSize:13, color:"#1A1040", outline:"none", background:"#FAFCFF", fontFamily:"inherit", boxSizing:"border-box" },
-  label:   { display:"block", fontSize:11, fontWeight:700, color:"#C0BCCE", letterSpacing:"0.06em", marginBottom:5 },
-};
+  // ブラウザがdivでなくpタグで段落を生成するよう強制
+  useEffect(()=>{
+    document.execCommand("defaultParagraphSeparator",false,"p");
+  },[]);
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// MICRO COMPONENTS
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-const Toggle = ({ on, onChange }) => (
-  <div onClick={() => onChange(!on)} style={{ width:42, height:23, borderRadius:12, background:on?"#8B6FE8":"#A78BFA", cursor:"pointer", display:"flex", alignItems:"center", padding:"0 3px", transition:"background 0.2s", flexShrink:0 }}>
-    <div style={{ width:17, height:17, borderRadius:"50%", background:"#fff", marginLeft:on?"auto":0, transition:"margin 0.2s" }} />
-  </div>
-);
+  const handleKeyDown=e=>{
+    if(e.isComposing||isComposing.current)return;
 
-const StatusPill = ({ status, onChange, size="sm" }) => {
-  const s = STATUSES.find(x => x.id === status) || STATUSES[0];
-  const baseStyle = { background:`${s.color}18`, color:s.color, border:`1px solid ${s.color}40`, borderRadius:6, fontWeight:700, cursor:onChange?"pointer":"default", fontFamily:"inherit" };
-  if (onChange) return (
-    <select value={status} onChange={e => onChange(e.target.value)} style={{ ...baseStyle, padding: size==="xs"?"2px 6px":"3px 8px", fontSize: size==="xs"?10:11, outline:"none" }}>
-      {STATUSES.map(x => <option key={x.id} value={x.id} style={{ background:"#fff", color:x.color }}>{x.label}</option>)}
-    </select>
-  );
-  return <span style={{ ...baseStyle, padding: size==="xs"?"2px 6px":"2px 9px", fontSize: size==="xs"?10:11, display:"inline-block" }}>{s.label}</span>;
-};
+    // Tab: 箇条書きのインデント／アウトデント
+    if(e.key==="Tab"){
+      e.preventDefault();
+      const sel=window.getSelection();
+      if(sel&&sel.rangeCount>0){
+        const node=sel.getRangeAt(0).commonAncestorContainer;
+        const block=node.nodeType===3?node.parentElement:node;
+        const inList=block?.closest("li");
+        if(inList){
+          // リスト内のみインデント操作
+          document.execCommand(e.shiftKey?"outdent":"indent");
+          emit();
+          return;
+        }
+      }
+      // リスト外ではタブを無視（フォーカス移動させない）
+      return;
+    }
 
-const PlatformChip = ({ platformId, size="sm" }) => {
-  const p = PLATFORMS.find(x => x.id === platformId);
-  if (!p) return null;
-  return (
-    <span style={{ fontSize:size==="xs"?9:10, color:p.color, background:`${p.color}15`, borderRadius:4, padding: size==="xs"?"1px 5px":"2px 6px", fontWeight:700, flexShrink:0 }}>
-      {size==="xs" ? p.short : p.name}
-    </span>
-  );
-};
-
-
-const TargetChip = ({ targetId }) => {
-  const t = TARGETS.find(x => x.id === targetId);
-  if (!t) return null;
-  return (
-    <span style={{ fontSize:9, color:t.color, background:`${t.color}18`, borderRadius:4, padding:"1px 5px", fontWeight:700, borderLeft:`2px solid ${t.color}` }}>
-      {t.name}
-    </span>
-  );
-};
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// SEARCH MODAL (Cmd+K)
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-function SearchModal({ posts, templates, onSelectPost, onClose }) {
-  const [q, setQ] = useState("");
-  const [cursor, setCursor] = useState(-1);
-  const inputRef = useRef(null);
-  useEffect(() => { inputRef.current?.focus(); }, []);
-
-  const results = useMemo(() => {
-    if (!q.trim()) return { posts: posts.slice(0, 6), templates: templates.slice(0, 4) };
-    const lq = q.toLowerCase();
-    return {
-      posts: posts.filter(p => [p.title, p.body, p.note, ...p.tags].join(" ").toLowerCase().includes(lq)).slice(0, 8),
-      templates: templates.filter(t => [t.title, t.body, t.folder, ...t.tags].join(" ").toLowerCase().includes(lq)).slice(0, 5),
-    };
-  }, [q, posts, templates]);
-
-  const highlight = (text) => {
-    if (!q.trim()) return text;
-    const idx = text.toLowerCase().indexOf(q.toLowerCase());
-    if (idx === -1) return text;
-    return <>{text.slice(0, idx)}<mark style={{ background:"#FEF08A", color:"#1A1040", borderRadius:2 }}>{text.slice(idx, idx + q.length)}</mark>{text.slice(idx + q.length)}</>;
+    if(e.key!=="Enter")return;
+    e.preventDefault();
+    if(e.shiftKey){
+      // Shift+Enter: 同形式内で改行（br挿入）
+      document.execCommand("insertLineBreak");
+    } else {
+      // Enter: 新段落 + 形式をpにリセット
+      document.execCommand("insertParagraph");
+      const sel=window.getSelection();
+      if(sel&&sel.rangeCount>0){
+        const node=sel.getRangeAt(0).commonAncestorContainer;
+        const block=node.nodeType===3?node.parentElement:node;
+        const tag=block?.closest("h1,h2,blockquote")?.tagName?.toLowerCase();
+        if(tag)document.execCommand("formatBlock",false,"p");
+      }
+    }
+    emit();
   };
 
-  return (
-    <div style={{ position:"fixed", inset:0, background:"rgba(15,20,35,0.65)", zIndex:500, display:"flex", alignItems:"flex-start", justifyContent:"center", paddingTop:100, backdropFilter:"blur(4px)" }}
-      onClick={onClose}>
-      <div style={{ width:580, background:"#fff", borderRadius:16, boxShadow:"0 24px 60px rgba(0,0,0,0.25)", overflow:"hidden", animation:"searchIn 0.18s cubic-bezier(0.34,1.56,0.64,1)" }}
-        onClick={e => e.stopPropagation()}>
-        <div style={{ display:"flex", alignItems:"center", gap:12, padding:"16px 20px", borderBottom:"1px solid #EDE8FF" }}>
-          <span style={{ fontSize:18, color:"#7A9AB5" }}>⌕</span>
-          <input ref={inputRef} value={q}
-            onChange={e => { setQ(e.target.value); setCursor(-1); }}
-            onKeyDown={e => {
-              const total = results.posts.length + results.templates.length;
-              if (e.key === "ArrowDown") { e.preventDefault(); setCursor(c => Math.min(c+1, total-1)); }
-              else if (e.key === "ArrowUp") { e.preventDefault(); setCursor(c => Math.max(c-1, -1)); }
-              else if (e.key === "Enter" && cursor >= 0) {
-                if (cursor < results.posts.length) { onSelectPost(results.posts[cursor]); onClose(); }
-              }
-            }}
-            placeholder="配信・テンプレートを検索..."
-            style={{ flex:1, border:"none", outline:"none", fontSize:16, color:"#1A1040", fontFamily:"inherit", background:"transparent" }} />
-          <kbd style={{ background:"#E9DFFE", color:"#C0BCCE", borderRadius:5, padding:"2px 7px", fontSize:11, fontWeight:700 }}>ESC</kbd>
+  return(
+    <div ref={editorRef} contentEditable suppressContentEditableWarning
+      className="xb" data-ph="本文を入力…"
+      onCompositionStart={()=>{isComposing.current=true;}}
+      onCompositionEnd={()=>{isComposing.current=false;emit();}}
+      onInput={()=>{if(!isComposing.current)emit();}}
+      onPaste={e=>{
+        e.preventDefault();
+        const text=e.clipboardData.getData("text/plain");
+        if(!text)return;
+        // 段落（2連続改行）と行内改行を区別して変換
+        const paras=text.split(/\n{2,}/);
+        if(paras.length<=1){
+          // 単一段落 — 改行をbrに
+          document.execCommand("insertHTML",false,text.replace(/\n/g,"<br>"));
+        }else{
+          // 複数段落 — pタグで囲む
+          const html=paras.filter(p=>p.trim()).map(p=>`<p>${p.replace(/\n/g,"<br>").trim()}</p>`).join("");
+          document.execCommand("insertHTML",false,html);
+        }
+      }}
+      onKeyDown={handleKeyDown}
+      style={{minHeight:360,fontSize:17,lineHeight:1.75,color:"#0f1419",fontFamily:XFONT,wordBreak:"break-word",caretColor:"#1d9bf0",outline:"none"}}
+    />
+  );
+}
+
+// ── ツールバー用ボタン（Toolbar外で定義することで毎レンダー再生成を防ぐ） ──
+function ToolbarBtn({title,onClick,active,ch}){
+  return(
+    <button title={title} onMouseDown={e=>{e.preventDefault();onClick();}}
+      style={{border:active?"1.5px solid #1d9bf0":"1px solid transparent",background:active?"#e8f5fe":"none",color:active?"#1d9bf0":"#536471",borderRadius:5,padding:"4px 6px",cursor:"pointer",fontSize:"0.82em",fontWeight:active?800:600,display:"flex",alignItems:"center",justifyContent:"center",height:28,minWidth:26,fontFamily:"inherit",transition:"all .1s"}}
+      onMouseEnter={e=>{if(!active){e.currentTarget.style.background="#eff3f4";e.currentTarget.style.color="#0f1419";}}}
+      onMouseLeave={e=>{if(!active){e.currentTarget.style.background="none";e.currentTarget.style.color="#536471";}}}>
+      {ch}
+    </button>
+  );
+}
+function ToolbarSep(){return <div style={{width:1,height:16,background:"#e8e0d6",margin:"0 2px"}}/>;}
+
+function Toolbar({onInsertOpen}){
+  const exec=React.useCallback((cmd,val)=>document.execCommand(cmd,false,val??null),[]);
+  // アクティブ状態トラッキング
+  const [fmt,setFmt]=useState({bold:false,italic:false,strike:false,block:"p"});
+  useEffect(()=>{
+    const update=()=>{
+      try{
+        const sel=window.getSelection();
+        if(!sel||sel.rangeCount===0)return;
+        const node=sel.getRangeAt(0).commonAncestorContainer;
+        const el=node.nodeType===3?node.parentElement:node;
+        const block=el?.closest("h1,h2,blockquote,p,li")||el;
+        setFmt({
+          bold:document.queryCommandState("bold"),
+          italic:document.queryCommandState("italic"),
+          strike:document.queryCommandState("strikeThrough"),
+          block:block?.tagName?.toLowerCase()||"p",
+        });
+      }catch(e){}
+    };
+    document.addEventListener("selectionchange",update);
+    return()=>document.removeEventListener("selectionchange",update);
+  },[]);
+
+  // B・Sp はファイル上部で定義済み
+
+  // ブロックラベル
+  const blockLabel=TOOLBAR_BLOCK_LABELS[fmt.block]||"本文";
+
+  return(
+    <div style={{display:"flex",alignItems:"center",gap:1,padding:"5px 14px",borderBottom:"1px solid #e8e0d6",background:"#fff",flexWrap:"wrap",flexShrink:0}}>
+      {/* 形式セレクト（現在の形式を表示） */}
+      <select value={["p","h1","h2","blockquote"].includes(fmt.block)?fmt.block:"p"}
+        onChange={e=>{exec("formatBlock",e.target.value);}}
+        style={{border:"1px solid #e8e0d6",borderRadius:5,padding:"2px 7px",fontSize:"0.77em",color:"#1a1a1a",background:"#fff",cursor:"pointer",fontFamily:"inherit",height:28,fontWeight:600}}>
+        <option value="p">本文</option>
+        <option value="h1">見出し</option>
+        <option value="h2">小見出し</option>
+        <option value="blockquote">引用</option>
+      </select>
+      <ToolbarSep/>
+      <ToolbarBtn title="太字 (Ctrl+B)" onClick={()=>exec("bold")} active={fmt.bold} ch={<strong>B</strong>}/>
+      <ToolbarBtn title="斜体 (Ctrl+I)" onClick={()=>exec("italic")} active={fmt.italic} ch={<em>I</em>}/>
+      <ToolbarBtn title="取り消し線" onClick={()=>exec("strikeThrough")} active={fmt.strike} ch={<s>S</s>}/>
+      <ToolbarSep/>
+      <ToolbarBtn title="箇条書き" onClick={()=>exec("insertUnorderedList")} active={fmt.block==="li"} ch={
+        <svg width="13" height="13" viewBox="0 0 14 14" fill="currentColor">
+          <circle cx="1.5" cy="3" r="1.5"/><rect x="4" y="2" width="10" height="2" rx="1"/>
+          <circle cx="1.5" cy="7" r="1.5"/><rect x="4" y="6" width="10" height="2" rx="1"/>
+          <circle cx="1.5" cy="11" r="1.5"/><rect x="4" y="10" width="10" height="2" rx="1"/>
+        </svg>}/>
+      <ToolbarBtn title="番号リスト" onClick={()=>exec("insertOrderedList")} active={false} ch="1≡"/>
+      <ToolbarSep/>
+      <ToolbarBtn title="リンク" onClick={()=>{const u=prompt("URL:");if(u)exec("createLink",u);}} active={false} ch="🔗"/>
+      <ToolbarBtn title="区切り線" onClick={()=>exec("insertHorizontalRule")} active={false} ch="—"/>
+      <button onMouseDown={e=>e.preventDefault()} onClick={onInsertOpen}
+        style={{border:"1px solid #e8e0d6",background:"none",color:"#536471",borderRadius:5,padding:"3px 8px",cursor:"pointer",fontSize:"0.73em",fontWeight:600,height:28,display:"flex",alignItems:"center",gap:2,fontFamily:"inherit",marginLeft:3}}
+        onMouseEnter={e=>{e.currentTarget.style.background="#eff3f4";e.currentTarget.style.color="#0f1419";}}
+        onMouseLeave={e=>{e.currentTarget.style.background="none";e.currentTarget.style.color="#536471";}}>
+        ＋挿入
+      </button>
+      <ToolbarBtn title="書式クリア" onClick={()=>exec("removeFormat")} active={false} ch="✕"/>
+      {/* 現在の形式バッジ */}
+      <div style={{marginLeft:6,fontSize:"0.68em",color:"#1d9bf0",background:"#e8f5fe",border:"1px solid #93d3fc",borderRadius:10,padding:"1px 7px",fontWeight:700}}>{blockLabel}</div>
+      <div style={{marginLeft:"auto",fontSize:"0.6em",color:"#bbb"}}>Enter=新段落　⇧Enter=同形式改行</div>
+    </div>
+  );
+}
+
+function InsertModal({onClose,savedRange,bodyRef}){
+  const [tab,setTab]=useState("image"),[url,setUrl]=useState("");
+  const [imgSize,setImgSize]=useState("full");
+  const [imgAlign,setImgAlign]=useState("left");
+  const fileRef=useRef(null);
+  const insertAt=html=>{
+    bodyRef.current?.focus();
+    const sel=window.getSelection();
+    if(savedRange){sel.removeAllRanges();sel.addRange(savedRange);}
+    document.execCommand("insertHTML",false,html);
+  };
+  // IMG_SIZES_OPTS / IMG_ALIGNS_OPTS はモジュールレベルで定義済み
+  const imgStyleStr=(()=>{
+    const w=imgSize==="small"?"25%":imgSize==="medium"?"50%":imgSize==="large"?"75%":"100%";
+    const ml=imgAlign==="center"?"auto":imgAlign==="right"?"auto":"0";
+    const mr=imgAlign==="center"?"auto":imgAlign==="right"?"0":"auto";
+    return `max-width:${w};width:${w};border-radius:8px;display:block;margin-left:${ml};margin-right:${mr};`;
+  })();
+  const [uploading,setUploading]=useState(false);
+  const handleImage=async e=>{
+    const file=e.target.files?.[0];if(!file)return;
+    if(file.size>50*1024*1024){alert("画像は50MB以下にしてください");return;}
+    setUploading(true);
+    try{
+      const ext=(file.name.split(".").pop()||"jpg").toLowerCase();
+      const safeName=`${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+      const path=`images/${safeName}`;
+      const{error:upErr}=await supabase.storage
+        .from(STORAGE_BUCKET)
+        .upload(path,file,{contentType:file.type,cacheControl:"3600",upsert:false});
+      if(upErr){
+        const msg=upErr.message||"";
+        if(msg.includes("not found")||msg.includes("bucket"))
+          throw new Error("バケット「contentos」が存在しないか非公開です。Supabase→Storageで作成してください");
+        if(msg.includes("policy")||msg.includes("violates"))
+          throw new Error("ストレージのRLSポリシーでアップロードが拒否されました。ポリシーを確認してください");
+        throw upErr;
+      }
+      const{data:urlData}=supabase.storage.from(STORAGE_BUCKET).getPublicUrl(path);
+      if(!urlData?.publicUrl)throw new Error("公開URLの取得に失敗しました");
+      insertAt(`<p><img src="${urlData.publicUrl}" alt="${file.name}" style="${imgStyleStr}"/></p>`);
+      onClose();
+    }catch(err){
+      alert("画像のアップロードに失敗しました:\n"+err.message);
+    }finally{
+      setUploading(false);
+      if(fileRef.current)fileRef.current.value="";
+    }
+  };
+  const handlePost=()=>{
+    if(!url.trim())return;
+    const isNote=/note\.com/.test(url);
+    const icon=isNote?"📄":"𝕏";
+    insertAt(`<div style="border:1.5px solid #e8e0d6;border-radius:10px;padding:10px 14px;margin:.6em 0;background:#f7f9f9;display:flex;align-items:center;gap:10px;" contenteditable="false"><span>${icon}</span><a href="${url}" target="_blank" style="color:#1d9bf0;text-decoration:none;font-size:13px;word-break:break-all;">${url}</a></div><p><br></p>`);
+    onClose();
+  };
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:700,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}
+      onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+      <div style={{background:"#fff",border:"1.5px solid #e8e0d6",borderRadius:14,width:"100%",maxWidth:360,overflow:"hidden",boxShadow:"0 20px 60px #00000025"}}>
+        <div style={{display:"flex",borderBottom:"1px solid #e8e0d6"}}>
+          {[["image","🖼 画像"],["post","リンク挿入"]].map(([t,l])=>(
+            <button key={t} onClick={()=>setTab(t)} style={{flex:1,border:"none",background:"none",padding:"11px 0",fontWeight:tab===t?700:500,color:tab===t?"#f59e0b":"#999",borderBottom:tab===t?"2px solid #f59e0b":"2px solid transparent",cursor:"pointer",fontSize:"0.82em",fontFamily:"inherit"}}>{l}</button>
+          ))}
         </div>
-
-        <div style={{ maxHeight:480, overflowY:"auto" }}>
-          {results.posts.length > 0 && (
-            <div>
-              <div style={{ padding:"10px 20px 6px", fontSize:10, fontWeight:800, color:"#7A9AB5", letterSpacing:"0.1em" }}>配信</div>
-              {results.posts.map((p, pi) => {
-                const s = STATUSES.find(x => x.id === p.status);
-                return (
-                  <div key={p.id} onClick={() => { onSelectPost(p); onClose(); }}
-                    style={{ padding:"11px 20px", display:"flex", alignItems:"center", gap:12, cursor:"pointer", background:cursor===pi?"#EDE6FF":"transparent" }}
-                    onMouseEnter={e => e.currentTarget.style.background="#EDE6FF"}
-                    onMouseLeave={e => { if(cursor!==pi) e.currentTarget.style.background="transparent"; }}>
-                    <div style={{ width:3, height:32, borderRadius:2, background:s?.color, flexShrink:0 }} />
-                    <div style={{ flex:1, minWidth:0 }}>
-                      <div style={{ fontSize:13, fontWeight:700, color:"#1A1040", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{highlight(p.title || "（タイトル未入力）")}</div>
-                      <div style={{ fontSize:11, color:"#C0BCCE", marginTop:2 }}>{p.date.slice(5).replace("-","/")} · {p.time}</div>
-                    </div>
-                    <div style={{ display:"flex", gap:4, flexShrink:0 }}>
-                      {p.platforms.slice(0,2).map(pid => <PlatformChip key={pid} platformId={pid} size="xs" />)}
-                      <StatusPill status={p.status} size="xs" />
-                    </div>
-                  </div>
-                );
-              })}
+        <div style={{padding:"14px 16px 8px"}}>
+          {tab==="image"&&(<><input ref={fileRef} type="file" accept="image/*" style={{display:"none"}} onChange={handleImage}/>
+            {/* サイズ選択 */}
+            <div style={{marginBottom:8}}>
+              <div style={{fontSize:10,fontWeight:700,color:"#888",marginBottom:5}}>サイズ</div>
+              <div style={{display:"flex",gap:4}}>
+                {IMG_SIZES_OPTS.map(([v,l])=>(
+                  <button key={v} onClick={()=>setImgSize(v)}
+                    style={{flex:1,padding:"4px 0",borderRadius:6,border:imgSize===v?"2px solid #f59e0b":"1.5px solid #e0d8ce",background:imgSize===v?"#fef3c7":"#fff",fontSize:10,fontWeight:imgSize===v?700:500,color:imgSize===v?"#d97706":"#555",cursor:"pointer",fontFamily:"inherit"}}>
+                    {l}
+                  </button>
+                ))}
+              </div>
             </div>
-          )}
-
-          {results.templates.length > 0 && (
-            <div style={{ borderTop: results.posts.length > 0 ? "1px solid #EDE8FF" : "none" }}>
-              <div style={{ padding:"10px 20px 6px", fontSize:10, fontWeight:800, color:"#7A9AB5", letterSpacing:"0.1em" }}>テンプレート</div>
-              {results.templates.map(t => (
-                <div key={t.id} style={{ padding:"11px 20px", display:"flex", alignItems:"center", gap:12 }}
-                  onMouseEnter={e => e.currentTarget.style.background="#EDE6FF"}
-                  onMouseLeave={e => e.currentTarget.style.background="transparent"}>
-                  <span style={{ fontSize:18, flexShrink:0 }}>📄</span>
-                  <div style={{ flex:1 }}>
-                    <div style={{ fontSize:13, fontWeight:700, color:"#1A1040" }}>{highlight(t.title)}</div>
-                    <div style={{ fontSize:11, color:"#C0BCCE", marginTop:2 }}>📂 {t.folder} · {t.tags.map(x=>`#${x}`).join(" ")}</div>
-                  </div>
-                </div>
-              ))}
+            {/* 配置選択 */}
+            <div style={{marginBottom:10}}>
+              <div style={{fontSize:10,fontWeight:700,color:"#888",marginBottom:5}}>配置</div>
+              <div style={{display:"flex",gap:4}}>
+                {IMG_ALIGNS_OPTS.map(([v,l])=>(
+                  <button key={v} onClick={()=>setImgAlign(v)}
+                    style={{flex:1,padding:"4px 0",borderRadius:6,border:imgAlign===v?"2px solid #f59e0b":"1.5px solid #e0d8ce",background:imgAlign===v?"#fef3c7":"#fff",fontSize:10,fontWeight:imgAlign===v?700:500,color:imgAlign===v?"#d97706":"#555",cursor:"pointer",fontFamily:"inherit"}}>
+                    {l}
+                  </button>
+                ))}
+              </div>
             </div>
-          )}
-
-          {results.posts.length === 0 && results.templates.length === 0 && (
-            <div style={{ padding:"40px 20px", textAlign:"center", color:"#7A9AB5", fontSize:14 }}>"{q}" に一致する結果がありません</div>
-          )}
+            <button onClick={()=>!uploading&&fileRef.current?.click()} style={{width:"100%",border:"2px dashed #e8e0d6",background:"#f7f9f9",borderRadius:9,padding:"20px 0",cursor:uploading?"default":"pointer",color:uploading?"#f59e0b":"#aaa",fontSize:"0.83em",fontWeight:600,fontFamily:"inherit"}} onMouseEnter={e=>{if(!uploading){e.currentTarget.style.borderColor="#f59e0b";e.currentTarget.style.color="#f59e0b";}}} onMouseLeave={e=>{if(!uploading){e.currentTarget.style.borderColor="#e8e0d6";e.currentTarget.style.color="#aaa";}}}>{uploading?"⏳ アップロード中…":"📁 クリックして画像を選択"}</button></>)}
+          {tab==="post"&&(<><input value={url} onChange={e=>setUrl(e.target.value)} placeholder="https://..."
+            style={{width:"100%",border:"1.5px solid #e8e0d6",borderRadius:8,padding:"9px 11px",fontSize:"0.82em",fontFamily:"inherit",color:"#1a1a1a",marginBottom:10,outline:"none",boxSizing:"border-box"}}
+            onFocus={e=>e.target.style.borderColor="#f59e0b"} onBlur={e=>e.target.style.borderColor="#e8e0d6"}
+            onKeyDown={e=>{if(e.key==="Enter")handlePost();}}/>
+          <button onClick={handlePost} disabled={!url.trim()} style={{width:"100%",background:url.trim()?"#f59e0b":"#eff3f4",color:url.trim()?"#fff":"#aaa",border:"none",borderRadius:20,padding:"9px 0",fontWeight:700,fontSize:"0.82em",cursor:url.trim()?"pointer":"default",fontFamily:"inherit"}}>挿入</button></>)}
         </div>
+        <div style={{padding:"8px 16px 14px"}}><button onClick={onClose} style={{width:"100%",border:"1px solid #e8e0d6",background:"none",color:"#536471",borderRadius:7,padding:"7px",fontWeight:500,fontSize:"0.8em",cursor:"pointer",fontFamily:"inherit"}}>キャンセル</button></div>
+      </div>
+    </div>
+  );
+}
 
-        <div style={{ padding:"10px 20px", borderTop:"1px solid #EDE8FF", display:"flex", gap:16, color:"#7A9AB5", fontSize:11 }}>
-          <span>↑↓ 移動</span><span>↵ 選択</span><span>ESC 閉じる</span>
+// ── copy helpers ──
+// HTMLを読みやすいプレーンテキストに変換
+function htmlToPlain(html){
+  const div=document.createElement("div");
+  div.innerHTML=html;
+  function walk(node){
+    if(node.nodeType===3)return node.textContent;
+    const tag=node.tagName?.toLowerCase();
+    const children=Array.from(node.childNodes).map(walk).join("");
+    if(tag==="br")return "\n";
+    if(tag==="p")return children+"\n\n";
+    if(tag==="h1"||tag==="h2")return children+"\n\n";
+    if(tag==="blockquote")return children.split("\n").map(l=>"　"+l).join("\n")+"\n\n";
+    if(tag==="li")return "・"+children+"\n";
+    if(tag==="ul"||tag==="ol")return children+"\n";
+    if(tag==="hr")return "───────────\n\n";
+    if(tag==="div"&&node.getAttribute("contenteditable")==="false")return "[リンク]\n";
+    return children;
+  }
+  return walk(div).replace(/\n{3,}/g,"\n\n").trim();
+}
+function copyRichText(html,_plain,onDone){
+  const plain=htmlToPlain(html);
+  try{navigator.clipboard.write([new ClipboardItem({"text/html":new Blob([html],{type:"text/html"}),"text/plain":new Blob([plain],{type:"text/plain"})})]).then(onDone).catch(()=>fallbackCopy(plain,onDone));}
+  catch(e){fallbackCopy(plain,onDone);}
+}
+function fallbackCopy(plain,onDone){
+  const ta=document.createElement("textarea");ta.value=plain;ta.style.cssText="position:fixed;left:-9999px;top:0";
+  document.body.appendChild(ta);ta.select();
+  try{document.execCommand("copy");}catch(e){}document.body.removeChild(ta);onDone?.();
+}
+
+// ════════════════════════════════════════════════════════
+// 概要メモ（リンク対応）
+// ════════════════════════════════════════════════════════
+function MemoEditor({memo,memoLinks,onChange}){
+  const [linkInput,setLinkInput]=useState("");
+  const [labelInput,setLabelInput]=useState("");
+  // 後方互換：文字列 or {label,url} オブジェクト
+  const links=(memoLinks||[]).map(l=>typeof l==="string"?{label:"",url:l}:l);
+  const addLink=()=>{
+    const url=linkInput.trim();
+    if(!isUrl(url))return;
+    onChange({memo,memoLinks:[...links,{label:labelInput.trim(),url}]});
+    setLinkInput("");setLabelInput("");
+  };
+  return(
+    <div style={{display:"flex",flexDirection:"column",gap:7}}>
+      <textarea value={memo} onChange={e=>onChange({memo:e.target.value,memoLinks:links})} placeholder="執筆の意図・注意点など" rows={4}
+        style={{width:"100%",background:"#fff",border:"1.5px solid #e0d8ce",borderRadius:8,padding:"8px 10px",color:"#1a1a1a",fontSize:"0.8em",outline:"none",boxSizing:"border-box",fontFamily:"inherit",resize:"vertical",lineHeight:1.7}}
+        onFocus={e=>e.target.style.borderColor="#f59e0b"} onBlur={e=>e.target.style.borderColor="#e0d8ce"}/>
+      {links.length>0&&(
+        <div style={{display:"flex",flexDirection:"column",gap:3,maxHeight:180,overflowY:"auto"}}>
+          {links.map((l,i)=>(
+            <div key={i} style={{display:"flex",alignItems:"center",gap:6,background:"#f0f9ff",border:"1px solid #bae6fd",borderRadius:7,padding:"5px 8px"}}>
+              <span style={{fontSize:"0.7em",flexShrink:0}}>🔗</span>
+              <div style={{flex:1,minWidth:0}}>
+                {l.label&&<div style={{fontSize:"0.7em",fontWeight:700,color:"#0369a1",marginBottom:1}}>{l.label}</div>}
+                <a href={l.url} target="_blank" rel="noreferrer" style={{fontSize:"0.7em",color:"#0369a1",textDecoration:"none",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",display:"block"}}>{l.url}</a>
+              </div>
+              <button onClick={()=>onChange({memo,memoLinks:links.filter((_,j)=>j!==i)})} style={{border:"none",background:"none",color:"#94a3b8",cursor:"pointer",fontSize:"0.8em",flexShrink:0}}>×</button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{display:"flex",flexDirection:"column",gap:4}}>
+        <input value={labelInput} onChange={e=>setLabelInput(e.target.value)}
+          placeholder="ラベル（任意）"
+          style={{width:"100%",border:"1.5px solid #e0d8ce",borderRadius:8,padding:"5px 10px",fontSize:"0.77em",fontFamily:"inherit",color:"#1a1a1a",outline:"none",boxSizing:"border-box"}}
+          onFocus={e=>e.target.style.borderColor="#f59e0b"} onBlur={e=>e.target.style.borderColor="#e0d8ce"}/>
+        <div style={{display:"flex",gap:4}}>
+          <input value={linkInput} onChange={e=>setLinkInput(e.target.value)}
+            placeholder="URLをペースト → 追加"
+            onKeyDown={e=>{if(e.key==="Enter"&&!e.isComposing)addLink();}}
+            onPaste={e=>{const v=e.clipboardData.getData("text").trim();if(isUrl(v)){e.preventDefault();setLinkInput(v);}}}
+            style={{flex:1,border:"1.5px solid #e0d8ce",borderRadius:8,padding:"5px 10px",fontSize:"0.77em",fontFamily:"inherit",color:"#1a1a1a",outline:"none",boxSizing:"border-box"}}
+            onFocus={e=>e.target.style.borderColor="#f59e0b"} onBlur={e=>e.target.style.borderColor="#e0d8ce"}/>
+          <button onClick={addLink} disabled={!isUrl(linkInput.trim())}
+            style={{background:isUrl(linkInput.trim())?"#0369a1":"#e0d8ce",border:"none",borderRadius:8,padding:"5px 10px",fontSize:"0.77em",fontWeight:700,color:"#fff",cursor:isUrl(linkInput.trim())?"pointer":"default",fontFamily:"inherit",whiteSpace:"nowrap",transition:"background .15s"}}>
+            ＋追加
+          </button>
         </div>
       </div>
     </div>
   );
 }
 
-
-function filterTemplates(templates, q) {
-  if (!q.trim()) return templates;
-  const lq = q.toLowerCase();
-  return templates.filter(t => [t.title, t.folder, ...t.tags, t.body].join(" ").toLowerCase().includes(lq));
-}
-function highlightTitle(title, q) {
-  if (!q.trim()) return title;
-  const idx = title.toLowerCase().indexOf(q.toLowerCase());
-  if (idx === -1) return title;
-  return [title.slice(0,idx), title.slice(idx,idx+q.length), title.slice(idx+q.length)];
-}
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// RECURRING ENGINE
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-function generateRecurringPosts(rules, existingPosts, weeksAhead = 4) {
-  const generated = [];
-  const endDate = new Date();
-  endDate.setDate(endDate.getDate() + weeksAhead * 7);
-
-  rules.filter(r => r.active).forEach(rule => {
-    const start = parseLocalDate(rule.startDate);
-    const cursor = new Date(start);
-    let counter = rule.counter;
-
-    while (cursor <= endDate) {
-      const ds = fmtDate(cursor);
-      const alreadyExists = existingPosts.some(p => p.recurringId === rule.id && p.date === ds);
-      if (!alreadyExists) {
-        const title = rule.titleTemplate.replace("{{n}}", counter);
-        generated.push({
-          id: `gen_${rule.id}_${ds}`, title, date: ds, time: rule.time,
-          duration: rule.duration, status: "draft", platforms: rule.platforms,
-          tags: rule.tags, body: "", note: "", recurringId: rule.id, isGenerated: true, postTargets: [], defaultTemplateId: rule.defaultTemplateId || null,
-        });
-      }
-      counter++;
-      if (rule.freq === "weekly")   cursor.setDate(cursor.getDate() + 7);
-      else if (rule.freq === "daily")    cursor.setDate(cursor.getDate() + 1);
-      else if (rule.freq === "biweekly") cursor.setDate(cursor.getDate() + 14);
-      else if (rule.freq === "monthly") {
-        cursor.setMonth(cursor.getMonth() + 1);
-        if (rule.monthlyType === "weekday") {
-          // 第N曜日モード（例：第1土曜）
-          const week = rule.weekOfMonth || 1;
-          const dow  = rule.weekDay ?? 6;
-          const first = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
-          let offset = (dow - first.getDay() + 7) % 7;
-          offset += (week - 1) * 7;
-          cursor.setDate(1 + offset);
-        } else {
-          // 毎月X日モード
-          const targetDay = rule.monthDay || 1;
-          const maxDay = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0).getDate();
-          cursor.setDate(Math.min(targetDay, maxDay));
-        }
-      }
-      else break;
-    }
-  });
-  return generated;
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// NOTION IMPORT PANEL  (Notion REST API直接連携)
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-function NotionImportPanel({ onImport, onClose }) {
-  const [token, setToken]       = useState("");
-  const [tokenSaved, setTokenSaved] = useState(false);
-  const [query, setQuery]       = useState("");
-  const [loading, setLoading]   = useState(false);
-  const [results, setResults]   = useState([]);
-  const [pageContent, setPageContent] = useState({});
-  const [error, setError]       = useState("");
-  const [imported, setImported] = useState(new Set());
-
-  const saveToken = () => {
-    setTokenSaved(true);
-  };
-
-  // Extract plain text from Notion rich_text array
-  const richToText = (arr) => (arr || []).map(x => x.plain_text || "").join("");
-
-  // Get plain text from a page's blocks
-  const fetchPageBlocks = async (pageId) => {
-    const res = await fetch("/api/notion", {
-      method: "POST",
-      headers: { "Content-Type":"application/json" },
-      body: JSON.stringify({ action: "blocks", pageId }),
-    });
-    const data = await res.json();
-    return (data.results || []).map(block => {
-      const type = block.type;
-      const content = block[type];
-      if (content?.rich_text) return richToText(content.rich_text);
-      return "";
-    }).filter(Boolean).slice(0, 20).join("\n");
-  };
-
-  const search = async () => {
-    if (!token.trim()) { setError("Notion Integration Tokenを入力してください"); return; }
-    if (!query.trim()) return;
-    setLoading(true); setError(""); setResults([]);
-    try {
-      const res = await fetch("/api/notion", {
-        method: "POST",
-        headers: { "Content-Type":"application/json" },
-        body: JSON.stringify({ action: "search", query }),
-      });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.message || `HTTP ${res.status}`);
-      }
-      const data = await res.json();
-      const pages = (data.results || []).map(p => {
-        const props = p.properties || {};
-        // Try to get title from common property names
-        const titleProp = props.title || props.Name || props.名前 || props["タイトル"] || Object.values(props).find(v => v.type === "title");
-        const title = titleProp ? richToText(titleProp.title || titleProp.rich_text || []) : "（タイトルなし）";
-        const folder = p.parent?.database_id ? "Notionデータベース" : "Notionページ";
-        return { id: p.id, title, folder, tags:[], body:"", url: p.url };
-      });
-      setResults(pages);
-      if (pages.length === 0) setError("「" + query + "」に一致するページが見つかりませんでした");
-    } catch (e) {
-      setError(`検索エラー: ${e.message}。トークンとNotionの統合設定を確認してください。`);
-    }
-    setLoading(false);
-  };
-
-  const loadContent = async (item) => {
-    if (pageContent[item.id] !== undefined) return;
-    setPageContent(prev => ({ ...prev, [item.id]: "読み込み中..." }));
-    try {
-      const body = await fetchPageBlocks(item.id);
-      setPageContent(prev => ({ ...prev, [item.id]: body || "（本文なし）" }));
-    } catch {
-      setPageContent(prev => ({ ...prev, [item.id]: "（本文の取得に失敗しました）" }));
-    }
-  };
-
-  const doImport = (item) => {
-    onImport({ id: Date.now() + Math.random(), title: item.title, folder: item.folder, tags:[], body: pageContent[item.id] || "" });
-    setImported(s => new Set([...s, item.id]));
-  };
-
-  return (
-    <div style={{ position:"fixed", inset:0, background:"rgba(15,20,35,0.65)", zIndex:500, display:"flex", alignItems:"center", justifyContent:"center", backdropFilter:"blur(4px)" }}
-      onClick={onClose}>
-      <div style={{ width:580, background:"#fff", borderRadius:16, boxShadow:"0 24px 60px rgba(0,0,0,0.25)", overflow:"hidden", animation:"searchIn 0.18s ease", maxHeight:"88vh", display:"flex", flexDirection:"column" }}
-        onClick={e => e.stopPropagation()}>
-
-        {/* Header */}
-        <div style={{ padding:"18px 24px", borderBottom:"1px solid #EDE8FF", display:"flex", justifyContent:"space-between", alignItems:"center", flexShrink:0 }}>
-          <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-            <div style={{ width:32, height:32, borderRadius:8, background:"#F7F6F3", border:"1px solid #E8E5E0", display:"flex", alignItems:"center", justifyContent:"center", fontSize:18, fontWeight:900, color:"#4B38C8" }}>𝒩</div>
-            <div>
-              <div style={{ fontWeight:800, fontSize:15, color:"#4B38C8" }}>Notionから取り込む</div>
-              <div style={{ fontSize:11, color:"#C0BCCE", marginTop:1 }}>ページをテンプレートとして読み込む</div>
-            </div>
+// ════════════════════════════════════════════════════════
+// 再投稿モーダル
+// ════════════════════════════════════════════════════════
+function RepostModal({post,onClose,onRepost}){
+  const today=fmtDate(new Date());
+  const [dt,setDt]=useState(`${today}T09:00`);
+  const [repeat,setRepeat]=useState("none");
+  // REPOST_REPEATS はモジュールレベルで定義済み
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:800,display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+      <div style={{background:"#fff",borderRadius:16,width:"100%",maxWidth:380,padding:24,boxShadow:"0 20px 60px #00000025"}}>
+        <div style={{fontWeight:800,fontSize:"1.05em",color:"#0f1419",marginBottom:4}}>🔁 再投稿</div>
+        <div style={{fontSize:"0.8em",color:"#536471",marginBottom:18,lineHeight:1.5}}>「{post.title||"（タイトルなし）"}」を再投稿します</div>
+        <div style={{marginBottom:14}}>
+          <label style={{fontSize:"0.73em",fontWeight:700,color:"#888",display:"block",marginBottom:4}}>投稿日時</label>
+          <input type="datetime-local" value={dt} onChange={e=>setDt(e.target.value)}
+            style={{width:"100%",border:"1.5px solid #e0d8ce",borderRadius:8,padding:"8px 10px",fontSize:"0.84em",fontFamily:"inherit",outline:"none",boxSizing:"border-box"}}
+            onFocus={e=>e.target.style.borderColor="#f59e0b"} onBlur={e=>e.target.style.borderColor="#e0d8ce"}/>
+        </div>
+        <div style={{marginBottom:20}}>
+          <label style={{fontSize:"0.73em",fontWeight:700,color:"#888",display:"block",marginBottom:6}}>定期繰り返し</label>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:5}}>
+            {REPOST_REPEATS.map(([v,l])=>(
+              <button key={v} onClick={()=>setRepeat(v)}
+                style={{border:`1.5px solid ${repeat===v?"#f59e0b":"#e0d8ce"}`,background:repeat===v?"#fef3c7":"#fff",color:repeat===v?"#d97706":"#888",borderRadius:8,padding:"7px 0",fontSize:"0.73em",fontWeight:repeat===v?700:400,cursor:"pointer",fontFamily:"inherit"}}>
+                {l}
+              </button>
+            ))}
           </div>
-          <button onClick={onClose} style={{ background:"none", border:"none", color:"#C0BCCE", fontSize:18, cursor:"pointer" }}>✕</button>
+          {repeat!=="none"&&<div style={{marginTop:8,background:"#fffbeb",border:"1px solid #fde68a",borderRadius:7,padding:"7px 10px",fontSize:"0.73em",color:"#92400e"}}>{REPOST_REPEATS.find(([v])=>v===repeat)?.[1]}に自動作成されます</div>}
+        </div>
+        <div style={{display:"flex",gap:8}}>
+          <button onClick={()=>onRepost(dt,repeat)} style={{flex:1,background:"#f59e0b",border:"none",borderRadius:20,padding:"10px 0",fontWeight:800,fontSize:"0.85em",color:"#fff",cursor:"pointer",fontFamily:"inherit"}}>再投稿を作成</button>
+          <button onClick={onClose} style={{border:"1.5px solid #e0d8ce",background:"none",borderRadius:20,padding:"10px 14px",fontWeight:600,fontSize:"0.85em",color:"#888",cursor:"pointer",fontFamily:"inherit"}}>キャンセル</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════
+// 検索モーダル
+// ════════════════════════════════════════════════════════
+function SearchModal({posts,onClose,onSelect,onRepost}){
+  const [q,setQ]=useState(""),[pt,setPt]=useState("all");
+  const inputRef=useRef(null);
+  useEffect(()=>{inputRef.current?.focus();},[]);
+  useEffect(()=>{
+    const h=e=>{if(e.key==="Escape")onClose();};
+    window.addEventListener("keydown",h);return()=>window.removeEventListener("keydown",h);
+  },[]);
+  const results=React.useMemo(()=>posts.filter(p=>{
+    const mq=!q||p.title.includes(q)||stripHtml(p.body).includes(q)||(p.memo||"").includes(q);
+    const mp=pt==="all"||(p.postType||"x_post")===pt;
+    return mq&&mp;
+  }).sort((a,b)=>b.datetime.localeCompare(a.datetime)),[posts,q,pt]);
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:700,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"56px 20px 20px"}} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+      <div style={{background:"#fff",borderRadius:16,width:"100%",maxWidth:560,maxHeight:"72vh",overflow:"hidden",display:"flex",flexDirection:"column",boxShadow:"0 20px 60px #00000030"}}>
+        <div style={{padding:"12px 16px",borderBottom:"1px solid #e8e0d6",display:"flex",gap:8,alignItems:"center"}}>
+          <span style={{color:"#aaa"}}>🔍</span>
+          <input ref={inputRef} value={q} onChange={e=>setQ(e.target.value)} placeholder="タイトル・本文・メモで検索…"
+            style={{flex:1,border:"none",outline:"none",fontSize:"0.95em",fontFamily:"inherit",color:"#0f1419"}}/>
+          {q&&<button onClick={()=>setQ("")} style={{border:"none",background:"none",color:"#aaa",cursor:"pointer"}}>×</button>}
+          <select value={pt} onChange={e=>setPt(e.target.value)}
+            style={{border:"1px solid #e0d8ce",borderRadius:8,padding:"4px 8px",fontSize:"0.76em",fontFamily:"inherit",outline:"none",color:"#555"}}>
+            <option value="all">全種類</option>
+            {Object.entries(POST_TYPE).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
+          </select>
+        </div>
+        <div style={{flex:1,overflowY:"auto"}}>
+          {results.length===0?<div style={{padding:"40px 0",textAlign:"center",color:"#ccc",fontSize:"0.85em"}}>該当なし</div>
+          :results.map(p=>{
+            const pt2=POST_TYPE[p.postType||"x_post"],st=STATUS[p.status];
+            return(
+              <div key={p.id} style={{padding:"11px 16px",borderBottom:"1px solid #f3f4f6",display:"flex",gap:10,alignItems:"flex-start",cursor:"pointer"}}
+                onMouseEnter={e=>e.currentTarget.style.background="#f7f9f9"}
+                onMouseLeave={e=>e.currentTarget.style.background="#fff"}>
+                <span style={{width:8,height:8,borderRadius:"50%",background:pt2.dot,flexShrink:0,marginTop:5}}/>
+                <div style={{flex:1}} onClick={()=>onSelect(p)}>
+                  <div style={{fontWeight:700,fontSize:"0.88em",color:"#0f1419",marginBottom:2}}>{p.title||"（タイトルなし）"}</div>
+                  <div style={{fontSize:"0.75em",color:"#8b98a5",lineHeight:1.4,marginBottom:3}}>{stripHtml(p.body).slice(0,55)}…</div>
+                  <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+                    <span style={{fontSize:"0.69em",color:pt2.color,fontWeight:600,background:pt2.bg,border:`1px solid ${pt2.border}`,padding:"0 6px",borderRadius:10}}>{pt2.label}</span>
+                    {st&&<span style={{fontSize:"0.69em",color:st.text,background:st.chip,border:`1px solid ${st.border}`,padding:"0 6px",borderRadius:10,fontWeight:600}}>{st.label}</span>}
+                    <span style={{fontSize:"0.68em",color:"#aaa"}}>{p.datetime.slice(0,10)}</span>
+                  </div>
+                </div>
+                <button onClick={()=>onRepost(p)}
+                  style={{border:"1px solid #e0d8ce",background:"none",color:"#536471",borderRadius:7,padding:"4px 9px",fontSize:"0.71em",fontWeight:600,cursor:"pointer",flexShrink:0,fontFamily:"inherit"}}
+                  onMouseEnter={e=>{e.currentTarget.style.background="#f59e0b";e.currentTarget.style.color="#fff";e.currentTarget.style.borderColor="#f59e0b";}}
+                  onMouseLeave={e=>{e.currentTarget.style.background="none";e.currentTarget.style.color="#536471";e.currentTarget.style.borderColor="#e0d8ce";}}>
+                  🔁再投稿
+                </button>
+              </div>
+            );
+          })}
+        </div>
+        <div style={{padding:"9px 16px",borderTop:"1px solid #e8e0d6",fontSize:"0.72em",color:"#aaa",display:"flex",justifyContent:"space-between"}}>
+          <span>{results.length}件</span>
+          <button onClick={onClose} style={{border:"none",background:"none",color:"#aaa",cursor:"pointer",fontFamily:"inherit"}}>閉じる (Esc)</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── エディタサイドアイコン（EditorModal外で定義→毎レンダー再マウントを防ぐ） ──
+function SideIcon({id,icon,label,sidePanel,setSidePanel}){
+  const active=sidePanel===id;
+  return(
+    <button onClick={()=>setSidePanel(active?null:id)} title={label}
+      style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2,padding:"10px 0",border:"none",background:active?"#fef3c7":"none",color:active?"#d97706":"#bbb",cursor:"pointer",width:"100%",borderLeft:active?"3px solid #f59e0b":"3px solid transparent",transition:"all .1s",fontFamily:"inherit"}}
+      onMouseEnter={e=>{if(!active){e.currentTarget.style.background="#faf7f3";e.currentTarget.style.color="#666";}}}
+      onMouseLeave={e=>{if(!active){e.currentTarget.style.background="none";e.currentTarget.style.color="#bbb";}}}>
+      <span style={{fontSize:"1.1em"}}>{icon}</span>
+      <span style={{fontSize:"0.52em",fontWeight:600}}>{label}</span>
+    </button>
+  );
+}
+
+// ════════════════════════════════════════════════════════
+// エディタモーダル
+// ════════════════════════════════════════════════════════
+function EditorModal({post,onSave,onClose}){
+  const [draft,setDraft]=useState({...post,memoLinks:post.memoLinks||[],history:post.history||[]});
+  const [copyX,setCopyX]=useState(false),[copyNote,setCopyNote]=useState(false);
+  const [notionState,setNotionState]=useState("idle"); // idle | saving | done | error
+  const [insertOpen,setInsertOpen]=useState(false),[savedRange,setSavedRange]=useState(null);
+  const [sidePanel,setSidePanel]=useState(null);
+  const bodyEditorRef=useRef(null),articleAreaRef=useRef(null);
+
+  useEffect(()=>{
+    const h=e=>{if(e.key==="Escape"&&!insertOpen)onClose();};
+    window.addEventListener("keydown",h);return()=>window.removeEventListener("keydown",h);
+  },[insertOpen]);
+
+  const openInsert=()=>{
+    const sel=window.getSelection();
+    if(sel?.rangeCount>0){const r=sel.getRangeAt(0);setSavedRange(bodyEditorRef.current?.contains(r.commonAncestorContainer)?r.cloneRange():null);}
+    else setSavedRange(null);
+    setInsertOpen(true);
+  };
+  const handleSave=()=>onSave({...draft,history:[...(draft.history||[]),{at:nowStr(),note:"編集・保存"}]});
+  const doCopy=target=>{
+    const html=draft.body||"",plain=articleAreaRef.current?.innerText||"";
+    copyRichText(html,plain,()=>{
+      if(target==="x"){setCopyX(true);setTimeout(()=>setCopyX(false),3500);}
+      else{setCopyNote(true);setTimeout(()=>setCopyNote(false),3500);}
+    });
+  };
+
+  const saveToNotion=async()=>{
+    setNotionState("saving");
+    try{
+      const res=await fetch("/api/notion",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          title:draft.title,
+          body:draft.body,
+          status:draft.status,
+          postType:draft.postType,
+          datetime:draft.datetime,
+          memo:draft.memo,
+        }),
+      });
+      const data=await res.json();
+      if(!res.ok)throw new Error(data.error||"エラー");
+      setNotionState("done");
+      setTimeout(()=>setNotionState("idle"),4000);
+      // Notion URLを新しいタブで開く
+      if(data.url)window.open(data.url,"_blank");
+    }catch(e){
+      setNotionState("error");
+      setTimeout(()=>setNotionState("idle"),4000);
+      console.error(e);
+    }
+  };
+
+  const pt=POST_TYPE[draft.postType]||POST_TYPE.x_post;
+  const st=STATUS[draft.status];
+
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:14}}>
+      {insertOpen&&<InsertModal onClose={()=>setInsertOpen(false)} savedRange={savedRange} bodyRef={bodyEditorRef}/>}
+      <div style={{background:"#fff",borderRadius:18,width:"100%",maxWidth:1100,height:"calc(100vh - 28px)",overflow:"hidden",display:"flex",flexDirection:"column",boxShadow:"0 24px 80px #00000030"}}>
+
+        {/* ヘッダー */}
+        <div style={{display:"flex",alignItems:"center",padding:"0 14px",borderBottom:"1px solid #e8e0d6",background:"#fff",height:50,gap:7,flexShrink:0}}>
+          <select value={draft.postType} onChange={e=>setDraft(d=>({...d,postType:e.target.value}))}
+            style={{border:`1.5px solid ${pt.border}`,borderRadius:20,padding:"4px 10px",fontSize:11,fontWeight:700,color:pt.color,background:pt.bg,cursor:"pointer",fontFamily:"inherit",outline:"none"}}>
+            {Object.entries(POST_TYPE).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
+          </select>
+          <select value={draft.status} onChange={e=>setDraft(d=>({...d,status:e.target.value}))}
+            style={{border:`1.5px solid ${st?.border}`,borderRadius:20,padding:"4px 10px",fontSize:11,fontWeight:700,color:st?.text,background:st?.chip,cursor:"pointer",fontFamily:"inherit",outline:"none"}}>
+            {Object.entries(STATUS).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
+          </select>
+          <input type="datetime-local" value={draft.datetime} onChange={e=>setDraft(d=>({...d,datetime:e.target.value}))}
+            style={{border:"1.5px solid #e0d8ce",borderRadius:8,padding:"4px 8px",fontSize:11,color:"#555",fontFamily:"inherit",outline:"none"}}/>
+          <div style={{flex:1}}/>
+          <button onClick={saveToNotion} disabled={notionState==="saving"}
+            style={{
+              background:notionState==="done"?"#00ba7c":notionState==="error"?"#ef4444":notionState==="saving"?"#9ca3af":"#000",
+              color:"#fff",border:"none",borderRadius:20,padding:"6px 12px",fontSize:11,fontWeight:700,
+              cursor:notionState==="saving"?"default":"pointer",fontFamily:"inherit",whiteSpace:"nowrap",
+              transition:"background .2s",display:"flex",alignItems:"center",gap:5,
+            }}>
+            {notionState==="saving"?"⏳ 保存中…":notionState==="done"?"✅ Notion保存完了":notionState==="error"?"❌ 保存失敗":<>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M4.459 4.208c.746.606 1.026.56 2.428.466l13.215-.793c.28 0 .047-.28-.046-.326L17.86 1.968c-.42-.326-.981-.7-2.055-.607L3.01 2.295c-.466.046-.56.28-.374.466zm.793 3.08v13.904c0 .747.373 1.027 1.214.98l14.523-.84c.841-.046.935-.56.935-1.167V6.354c0-.606-.233-.933-.748-.887l-15.177.887c-.56.047-.747.327-.747.933zm14.337.745c.093.42 0 .84-.42.888l-.7.14v10.264c-.608.327-1.168.514-1.635.514-.748 0-.935-.234-1.495-.933l-4.577-7.186v6.952L12.21 19s0 .84-1.168.84l-3.222.186c-.093-.186 0-.653.327-.746l.84-.233V9.854L7.822 9.76c-.094-.42.14-1.026.793-1.073l3.456-.233 4.764 7.279v-6.44l-1.215-.14c-.093-.514.28-.887.747-.933zM1.936 1.035l13.31-.98c1.634-.14 2.055-.047 3.082.7l4.249 2.986c.7.513.934.653.934 1.213v16.378c0 1.026-.373 1.634-1.68 1.726l-15.458.934c-.98.047-1.448-.093-1.962-.747l-3.129-4.06c-.56-.747-.793-1.306-.793-1.96V2.667c0-.839.374-1.54 1.447-1.632z"/></svg>
+              Notionに保存
+            </>}
+          </button>
+          <button onClick={()=>doCopy("note")} style={{background:copyNote?"#00ba7c":"#41c9b4",color:"#fff",border:"none",borderRadius:20,padding:"6px 12px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap",transition:"background .2s"}}>{copyNote?"✅ 完了":"note にコピー"}</button>
+          <button onClick={()=>doCopy("x")} style={{background:copyX?"#00ba7c":"#1d9bf0",color:"#fff",border:"none",borderRadius:20,padding:"6px 12px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap",transition:"background .2s"}}>{copyX?"✅ 完了":"𝕏 にコピー"}</button>
+          <div style={{width:1,height:20,background:"#e8e0d6"}}/>
+          <button onClick={handleSave} style={{background:"#f59e0b",border:"none",borderRadius:20,padding:"6px 16px",fontSize:12,fontWeight:800,color:"#fff",cursor:"pointer",fontFamily:"inherit"}}>保存</button>
+          <button onClick={onClose} style={{background:"none",border:"1.5px solid #e0d8ce",borderRadius:20,padding:"6px 11px",fontSize:12,fontWeight:600,color:"#888",cursor:"pointer",fontFamily:"inherit"}}>✕</button>
         </div>
 
-        <div style={{ flex:1, overflowY:"auto", padding:"18px 24px" }}>
-          {/* Token section */}
-          <div style={{ background:"#EDE6FF", border:"1px solid #EDE8FF", borderRadius:10, padding:"14px 16px", marginBottom:18 }}>
-            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
-              <label style={{ ...S.label, margin:0 }}>NOTION INTEGRATION TOKEN</label>
-              {tokenSaved && <span style={{ fontSize:10, color:"#059669", fontWeight:700 }}>✓ 保存済み</span>}
+        {/* 本体 */}
+        <div style={{flex:1,display:"flex",overflow:"hidden"}}>
+          {/* 記事エリア */}
+          <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+            <Toolbar onInsertOpen={openInsert}/>
+            <div style={{flex:1,overflowY:"auto"}}>
+              <div ref={articleAreaRef} style={{padding:"28px 32px 100px"}}>
+                <input type="text" value={draft.title} onChange={e=>setDraft(d=>({...d,title:e.target.value}))}
+                  placeholder="タイトルを入力..."
+                  style={{width:"100%",border:"none",outline:"none",fontSize:28,fontWeight:800,lineHeight:1.25,color:"#0f1419",fontFamily:XFONT,marginBottom:18,paddingBottom:18,borderBottom:"1px solid #e8e0d6",background:"transparent",display:"block",boxSizing:"border-box"}}/>
+                <BodyEditor value={draft.body} onChange={body=>setDraft(d=>({...d,body}))} editorRef={bodyEditorRef}/>
+              </div>
             </div>
-            <div style={{ display:"flex", gap:8 }}>
-              <input type="password" value={token} onChange={e => { setToken(e.target.value); setTokenSaved(false); }}
-                placeholder="secret_xxxxxxxxxxxxxxxxxxxx"
-                style={{ ...S.input, flex:1, fontSize:12, fontFamily:"'DM Mono',monospace" }} />
-              <button onClick={saveToken} style={{ ...S.primary, padding:"8px 14px", fontSize:11, flexShrink:0, opacity:0.5, cursor:"default" }} disabled>サーバー設定済み</button>
+            <div style={{padding:"4px 50px",borderTop:"1px solid #e8e0d6",background:"#faf7f3",fontSize:"0.67em",color:"#aaa",flexShrink:0}}>
+              {((draft.title||"")+(draft.body||"").replace(/<[^>]+>/g,"")).length.toLocaleString()} 文字
             </div>
-            <p style={{ margin:"8px 0 0", fontSize:11, color:"#7A9AB5", lineHeight:1.6 }}>
-              Notion → 設定 → コネクト → インテグレーションを開発する → 内部インテグレーション → トークンをコピー
-            </p>
-            <p style={{ margin:"6px 0 0", fontSize:10, color:"#F59E0B", lineHeight:1.6, background:"#FFFBEB", borderRadius:6, padding:"6px 10px" }}>
-              ⚠️ このパネルはデモ用途です。Vercel 本番環境では CORS の制約により直接接続できません。
-              Next.js 移行後は <code style={{ background:"#FEF3C7", borderRadius:3, padding:"0 4px" }}>/api/notion</code> ルートを経由してください。
-            </p>
           </div>
 
-          {/* Search */}
-          <div style={{ display:"flex", gap:8, marginBottom:14 }}>
-            <input value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => e.key==="Enter" && search()}
-              placeholder="例：動画テンプレート、告知フォーマット..."
-              style={{ ...S.input, flex:1 }} />
-            <button onClick={search} disabled={loading}
-              style={{ ...S.primary, opacity:loading?0.6:1, flexShrink:0 }}>
-              {loading ? "検索中..." : "検索"}
-            </button>
+          {/* アイコン列 */}
+          <div style={{width:50,borderLeft:"1px solid #e8e0d6",background:"#fafafa",display:"flex",flexDirection:"column",flexShrink:0}}>
+            <SideIcon id="meta" icon="⚙️" label="設定" sidePanel={sidePanel} setSidePanel={setSidePanel}/>
+            <SideIcon id="history" icon="📋" label="履歴" sidePanel={sidePanel} setSidePanel={setSidePanel}/>
+            <SideIcon id="share" icon="🔗" label="共有" sidePanel={sidePanel} setSidePanel={setSidePanel}/>
           </div>
 
-          {error && (
-            <div style={{ color:"#EF4444", fontSize:12, marginBottom:12, padding:"10px 14px", background:"#FEF2F2", borderRadius:8, lineHeight:1.6 }}>{error}</div>
-          )}
-
-          {loading && (
-            <div style={{ textAlign:"center", padding:"30px 0", color:"#C0BCCE" }}>
-              <div style={{ animation:"spin 1s linear infinite", display:"inline-block", fontSize:22 }}>◌</div>
-              <div style={{ fontSize:13, marginTop:10 }}>Notionを検索中...</div>
-            </div>
-          )}
-
-          {/* Results */}
-          {results.map(item => {
-            const isOpen = pageContent[item.id] !== undefined;
-            const isImported = imported.has(item.id);
-            return (
-              <div key={item.id} style={{ border:"1px solid #EDE8FF", borderRadius:10, marginBottom:8, overflow:"hidden" }}>
-                <div style={{ padding:"13px 16px", display:"flex", gap:12, alignItems:"flex-start" }}>
-                  <span style={{ fontSize:18, flexShrink:0, marginTop:2 }}>📄</span>
-                  <div style={{ flex:1, minWidth:0 }}>
-                    <div style={{ fontWeight:700, fontSize:13, color:"#4B38C8" }}>{item.title}</div>
-                    <div style={{ fontSize:11, color:"#C0BCCE", marginTop:2 }}>📂 {item.folder}</div>
-                    <button onClick={() => loadContent(item)}
-                      style={{ marginTop:6, background:"none", border:"none", color:"#C0BCCE", fontSize:11, cursor:"pointer", padding:0, fontFamily:"inherit", textDecoration:"underline" }}>
-                      {isOpen ? "本文を隠す" : "本文を確認 →"}
-                    </button>
-                    {isOpen && (
-                      <div style={{ marginTop:8, padding:"10px 12px", background:"#EDE6FF", borderRadius:7, fontSize:11, color:"#64748B", lineHeight:1.7, whiteSpace:"pre-wrap", maxHeight:120, overflow:"auto" }}>
-                        {pageContent[item.id]}
+          {/* サイドパネル展開 */}
+          {sidePanel&&(
+            <div style={{width:248,borderLeft:"1px solid #e8e0d6",background:"#fafafa",display:"flex",flexDirection:"column",flexShrink:0}}>
+              <div style={{padding:"11px 13px 9px",borderBottom:"1px solid #e8e0d6",display:"flex",justifyContent:"space-between",alignItems:"center",background:"#fff"}}>
+                <span style={{fontWeight:700,fontSize:"0.84em",color:"#0f1419"}}>{sidePanel==="meta"?"設定":sidePanel==="history"?"編集履歴":"共有"}</span>
+                <button onClick={()=>setSidePanel(null)} style={{border:"none",background:"none",color:"#aaa",cursor:"pointer"}}>✕</button>
+              </div>
+              <div style={{flex:1,overflowY:"auto",padding:13}}>
+                {sidePanel==="meta"&&(
+                  <div style={{display:"flex",flexDirection:"column",gap:12}}>
+                    <div>
+                      <label style={{fontSize:"0.7em",fontWeight:700,color:"#888",display:"block",marginBottom:5}}>概要メモ・リンク</label>
+                      <MemoEditor memo={draft.memo} memoLinks={draft.memoLinks} onChange={({memo,memoLinks})=>setDraft(d=>({...d,memo,memoLinks}))}/>
+                    </div>
+                    {(draft.comments||[]).length>0&&(
+                      <div>
+                        <label style={{fontSize:"0.7em",fontWeight:700,color:"#888",display:"block",marginBottom:5}}>コメント ({draft.comments.length})</label>
+                        {draft.comments.map((c,i)=>(
+                          <div key={i} style={{background:"#fff",border:"1px solid #e8e0d6",borderRadius:7,padding:"6px 9px",fontSize:"0.77em",color:"#444",lineHeight:1.6,marginBottom:4}}>{typeof c==="string"?c:c.text}</div>
+                        ))}
                       </div>
                     )}
                   </div>
-                  <button onClick={() => doImport(item)} disabled={isImported}
-                    style={{ ...S.primary, padding:"7px 14px", fontSize:11, background:isImported?"#C9BCEE":"#4B38C8", color:isImported?"#C0BCCE":"#fff", flexShrink:0, marginTop:2 }}>
-                    {isImported ? "✓ 取り込み済" : "取り込む"}
-                  </button>
-                </div>
+                )}
+                {sidePanel==="history"&&(
+                  <div>
+                    <div style={{fontSize:"0.71em",color:"#aaa",marginBottom:11,lineHeight:1.5}}>保存のたびに自動記録</div>
+                    {[...(draft.history||[])].reverse().map((h,i,arr)=>(
+                      <div key={i} style={{display:"flex",gap:9,marginBottom:11}}>
+                        <div style={{display:"flex",flexDirection:"column",alignItems:"center",flexShrink:0,paddingTop:3}}>
+                          <div style={{width:8,height:8,borderRadius:"50%",background:i===0?"#f59e0b":"#d1d5db"}}/>
+                          {i<arr.length-1&&<div style={{width:1,height:20,background:"#e8e0d6",margin:"3px 0"}}/>}
+                        </div>
+                        <div style={{flex:1}}>
+                          <div style={{fontSize:"0.77em",fontWeight:i===0?700:400,color:i===0?"#0f1419":"#536471"}}>{h.note}</div>
+                          <div style={{fontSize:"0.69em",color:"#aaa",marginTop:1}}>{new Date(h.at).toLocaleString("ja-JP",{month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"})}</div>
+                        </div>
+                      </div>
+                    ))}
+                    {(draft.history||[]).length===0&&<div style={{fontSize:"0.8em",color:"#ccc",textAlign:"center",paddingTop:16}}>履歴なし</div>}
+                  </div>
+                )}
+                {sidePanel==="share"&&(
+                  <div style={{fontSize:"0.8em",color:"#aaa",textAlign:"center",paddingTop:24,lineHeight:1.7}}>
+                    共有機能は<br/>準備中です
+                  </div>
+                )}
               </div>
-            );
-          })}
-
-          {!loading && results.length === 0 && !error && (
-            <div style={{ textAlign:"center", padding:"28px 0", color:"#7C70B8", fontSize:13 }}>
-              キーワードを入力してNotionを検索してください
             </div>
           )}
         </div>
@@ -467,1782 +729,1375 @@ function NotionImportPanel({ onImport, onClose }) {
   );
 }
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// CALENDAR VIEW
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-function CalendarView({ allPosts, weekAnchor, setWeekAnchor, selectedPost, onSelect, onNew, onNewRecurring }) {
-  const calRef = useRef(null);
-  const weekDates = getWeekDates(weekAnchor);
-  const HOURS = Array.from({ length: 24 }, (_, i) => i);
-  const SLOT_H = 60;
-  const _now = new Date(); const NOW_H = _now.getHours(), NOW_M = _now.getMinutes();
+// ════════════════════════════════════════════════════════
+// プレビューオーバーレイ
+// ════════════════════════════════════════════════════════
+function PreviewOverlay({post,onClose,onEdit,onRepost,onDuplicate,onDelete,onSaveComment,onChangeStatus}){
+  const [cmt,setCmt]=useState("");
+  const [localComments,setLocalComments]=useState(post.comments||[]);
+  const pt=POST_TYPE[post.postType||"x_post"]||POST_TYPE.x_post;
+  const st=STATUS[post.status];
 
-  useEffect(() => { if (calRef.current) calRef.current.scrollTop = 7 * SLOT_H; }, []);
+  useEffect(()=>{setLocalComments(post.comments||[]);},[post]);
+  useEffect(()=>{
+    const h=e=>{if(e.key==="Escape")onClose();};
+    window.addEventListener("keydown",h);return()=>window.removeEventListener("keydown",h);
+  },[]);
 
-  const getPostsForDay = (d) => allPosts.filter(p => p.date === fmtDate(d));
-  const timeToTop = (time) => { const [h, m] = time.split(":").map(Number); return (h + m/60) * SLOT_H; };
-
-  return (
-    <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"hidden" }}>
-      {/* Header */}
-      <div style={{ padding:"14px 24px 12px", background:"#F8F5FF", borderBottom:"1px solid #E8E2FF", flexShrink:0, display:"flex", alignItems:"center", justifyContent:"space-between" }}>
-        <div style={{ display:"flex", alignItems:"center", gap:12 }}>
-          <h2 style={{ margin:0, fontSize:17, fontWeight:800, color:"#4B38C8" }}>
-            {weekDates[0].getMonth()+1}月{weekDates[0].getDate()}日 — {weekDates[6].getMonth()+1}月{weekDates[6].getDate()}日
-          </h2>
-          <span style={{ fontSize:12, color:"#7A9AB5", fontWeight:600 }}>{weekDates[0].getFullYear()}</span>
-        </div>
-        <div style={{ display:"flex", gap:6 }}>
-          <button style={S.ghost} className="btn-ghost" onClick={() => { const d=new Date(weekAnchor); d.setDate(d.getDate()-7); setWeekAnchor(d); }}>←</button>
-          <button style={{ ...S.ghost, fontSize:12, fontWeight:700, padding:"6px 12px" }} className="btn-ghost" onClick={() => setWeekAnchor(new Date())}>今週</button>
-          <button style={S.ghost} className="btn-ghost" onClick={() => { const d=new Date(weekAnchor); d.setDate(d.getDate()+7); setWeekAnchor(d); }}>→</button>
-          <button onClick={onNewRecurring} style={{ ...S.ghost, fontSize:12, fontWeight:700, borderColor:"#C9BCEE", color:"#7C70B8" }}>↻ 定期配信</button>
-          <button style={S.primary} onClick={() => onNew(todayStr(), "10:00")}>+ 配信を追加</button>
-        </div>
-      </div>
-
-      {/* Day headers */}
-      <div style={{ display:"flex", background:"#F8F5FF", borderBottom:"1px solid #E8E2FF", flexShrink:0, paddingLeft:52 }}>
-        {weekDates.map((d, i) => {
-          const isToday = fmtDate(d) === todayStr();
-          return (
-            <div key={i} style={{ flex:1, padding:"8px 0", textAlign:"center" }}>
-              <div style={{ fontSize:10, color:i===0?"#EF4444":i===6?"#2563EB":"#C0BCCE", fontWeight:700, letterSpacing:"0.08em" }}>{DAYS_JP[d.getDay()]}</div>
-              <div style={{ width:28, height:28, borderRadius:"50%", background:isToday?"#4B38C8":"transparent", display:"flex", alignItems:"center", justifyContent:"center", margin:"3px auto 0" }}>
-                <span style={{ fontSize:14, fontWeight:isToday?900:500, color:isToday?"#fff":i===0?"#EF4444":i===6?"#2563EB":"#4B38C8" }}>{d.getDate()}</span>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Grid */}
-      <div ref={calRef} style={{ flex:1, overflowY:"auto", overflowX:"hidden", position:"relative" }}>
-        <div style={{ display:"flex", minHeight:24*SLOT_H }}>
-          {/* Time axis */}
-          <div style={{ width:52, flexShrink:0, position:"sticky", left:0, background:"#F8F5FF", zIndex:2 }}>
-            {HOURS.map(h => (
-              <div key={h} style={{ height:SLOT_H, display:"flex", alignItems:"flex-start", justifyContent:"flex-end", paddingRight:10, paddingTop:2 }}>
-                <span style={{ fontSize:10, color:"#7C70B8", fontFamily:"'DM Mono',monospace" }}>{String(h).padStart(2,"0")}:00</span>
-              </div>
-            ))}
-          </div>
-
-          {/* Columns */}
-          {weekDates.map((d, di) => {
-            const dayPosts = getPostsForDay(d);
-            const isToday = fmtDate(d) === todayStr();
-            return (
-              <div key={di} style={{ flex:1, position:"relative", borderLeft:"1px solid #E8E2FF", background:isToday?"#F8F5FF":"#FAFAF8", cursor:"crosshair" }}
-                onClick={e => {
-                  if (e.target !== e.currentTarget) return;
-                  const rect = e.currentTarget.getBoundingClientRect();
-                  const relY = e.clientY - rect.top + calRef.current.scrollTop;
-                  const h = Math.floor(relY / SLOT_H);
-                  const min = (relY % SLOT_H) < 30 ? "00" : "30";
-                  onNew(fmtDate(d), `${String(h).padStart(2,"0")}:${min}`);
-                }}>
-                {HOURS.map(h => <div key={h} style={{ position:"absolute", top:h*SLOT_H, left:0, right:0, borderTop:h===0?"none":"1px solid #EDE8FF", pointerEvents:"none" }} />)}
-                {HOURS.map(h => <div key={`h${h}`} style={{ position:"absolute", top:h*SLOT_H+SLOT_H/2, left:0, right:0, borderTop:"1px dashed #F0EBFF", pointerEvents:"none" }} />)}
-
-                {isToday && (
-                  <div style={{ position:"absolute", top:(NOW_H+NOW_M/60)*SLOT_H, left:-6, right:0, display:"flex", alignItems:"center", zIndex:3, pointerEvents:"none" }}>
-                    <div style={{ width:10, height:10, borderRadius:"50%", background:"#EF4444", flexShrink:0 }} />
-                    <div style={{ flex:1, height:1.5, background:"#EF4444" }} />
-                  </div>
-                )}
-
-                {(() => {
-                  // 被り検出: 同時刻ブロックを横分割
-                  const groups = {};
-                  dayPosts.forEach(p => {
-                    const top = timeToTop(p.time || "09:00");
-                    const key = Math.round(top / 4) * 4; // 4px単位でグループ化
-                    if (!groups[key]) groups[key] = [];
-                    groups[key].push(p);
-                  });
-                  return dayPosts.map((p, pi) => {
-                  const top = timeToTop(p.time || "09:00");
-                  const height = Math.max((p.duration || 60)/60*SLOT_H, 28);
-                  const s = STATUSES.find(x => x.id === p.status) || STATUSES[0];
-                  const isSelected = selectedPost?.id === p.id;
-                  const isRecurring = !!p.recurringId;
-                  const topKey = Math.round(top / 4) * 4;
-                  const siblings = groups[topKey] || [p];
-                  const sibIdx = siblings.findIndex(x => x.id === p.id);
-                  const sibCount = siblings.length;
-                  const colW = sibCount > 1 ? `calc((100% - 8px) / ${sibCount})` : undefined;
-                  const colL = sibCount > 1 ? `calc(4px + ${sibIdx} * (100% - 8px) / ${sibCount})` : undefined;
-
-                  return (
-                    <div key={p.id}
-                      onClick={e => { e.stopPropagation(); onSelect(p); }}
-                      style={{
-                        position:"absolute", top,
-                        left: colL ?? 4, right: colL ? undefined : 4,
-                        width: colW, height,
-                        borderRadius:8,
-                        background:isSelected ? s.color : `${s.color}20`,
-                        border:`1.5px solid ${isSelected?s.color:s.color+"60"}`,
-                        padding:"4px 7px", cursor:"pointer", overflow:"hidden",
-                        transition:"all 0.12s", zIndex:2,
-                        borderStyle: isRecurring ? "dashed" : "solid",
-                      }}>
-                      {/* Title */}
-                      <div style={{ fontSize:10, fontWeight:700, color:isSelected?"#fff":s.color, lineHeight:1.3, overflow:"hidden", display:"-webkit-box", WebkitLineClamp:height>36?2:1, WebkitBoxOrient:"vertical" }}>
-                        {isRecurring && <span style={{ opacity:0.7 }}>↻ </span>}
-                        {p.title || "（タイトル未入力）"}
-                      </div>
-
-                      {/* Status + Media row — always visible if height allows */}
-                      {height >= 36 && (
-                        <div style={{ display:"flex", alignItems:"center", gap:3, marginTop:3, flexWrap:"wrap" }}>
-                          {/* Status badge */}
-                          <span style={{
-                            fontSize:9, fontWeight:800, letterSpacing:"0.03em",
-                            background:isSelected?"rgba(255,255,255,0.25)":"rgba(255,255,255,0.7)",
-                            color:isSelected?"#fff":s.color,
-                            borderRadius:4, padding:"1px 5px", flexShrink:0,
-                          }}>{s.label}</span>
-
-                          {/* Platform chips */}
-                          {p.platforms.slice(0,2).map(pid => {
-                            const pl = PLATFORMS.find(x => x.id === pid);
-                            return pl ? (
-                              <span key={pid} style={{
-                                fontSize:9, fontWeight:700,
-                                color:isSelected?"rgba(255,255,255,0.9)":pl.color,
-                                background:isSelected?"rgba(255,255,255,0.08)":`${pl.color}20`,
-                                borderRadius:4, padding:"1px 5px", flexShrink:0,
-                              }}>{pl.short}</span>
-                            ) : null;
-                          })}
-                          {p.platforms.length > 2 && (
-                            <span style={{ fontSize:9, color:isSelected?"rgba(255,255,255,0.6)":"#7A9AB5" }}>+{p.platforms.length-2}</span>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Time */}
-                      {height >= 52 && (
-                        <div style={{ fontSize:9, color:isSelected?"rgba(255,255,255,0.65)":"#7A9AB5", marginTop:2 }}>{p.time}</div>
-                      )}
-                    </div>
-                  );
-                });
-                })()}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// LIST VIEW
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-function ListView({ posts, filterStatus, setFilterStatus, onSelect, onNew, setPosts, onStatusChange, onNewRecurring }) {
-  const [searchQ, setSearchQ] = useState("");
-  const [period, setPeriod] = useState("upcoming"); // "upcoming" | "past" | "all"
-  const filtered = useMemo(() => {
-    let list = filterStatus === "all" ? posts : posts.filter(p => p.status === filterStatus);
-    if (period === "upcoming") list = list.filter(p => p.date >= todayStr());
-    else if (period === "past") list = list.filter(p => p.date < todayStr());
-    if (searchQ.trim()) {
-      const lq = searchQ.toLowerCase();
-      list = list.filter(p => [p.title, p.body, p.note, ...p.tags].join(" ").toLowerCase().includes(lq));
-    }
-    // 今後は昇順（近い順）、過去は降順（新しい順）
-    return list.slice().sort((a,b) => period === "past"
-      ? b.date.localeCompare(a.date)
-      : a.date.localeCompare(b.date));
-  }, [posts, filterStatus, searchQ, period]);
-
-  return (
-    <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"hidden" }}>
-      <div style={{ padding:"14px 24px 12px", background:"#F8F5FF", borderBottom:"1px solid #E8E2FF", flexShrink:0 }}>
-        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
-          <h2 style={{ margin:0, fontSize:17, fontWeight:800, color:"#4B38C8" }}>配信リスト</h2>
-          <div style={{ display:"flex", gap:8 }}>
-            <button onClick={onNewRecurring} style={{ ...S.ghost, fontSize:12, fontWeight:700, borderColor:"#C9BCEE", color:"#7C70B8" }}>↻ 定期配信</button>
-            <button style={S.primary} onClick={onNew}>+ 追加</button>
-          </div>
-        </div>
-        <div style={{ display:"flex", gap:8, alignItems:"center", marginBottom:8 }}>
-          <div style={{ flex:1, position:"relative" }}>
-            <span style={{ position:"absolute", left:10, top:"50%", transform:"translateY(-50%)", fontSize:14, color:"#7A9AB5" }}>⌕</span>
-            <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="リスト内を検索..."
-              style={{ ...S.input, paddingLeft:32, fontSize:12 }} />
-          </div>
-          <div style={{ display:"flex", background:"#E9DFFE", borderRadius:8, padding:2, gap:1, flexShrink:0 }}>
-            {[{id:"upcoming",label:"今後"},{id:"past",label:"過去"},{id:"all",label:"すべて"}].map(p => (
-              <button key={p.id} onClick={() => setPeriod(p.id)}
-                style={{ padding:"5px 10px", borderRadius:6, border:"none", fontSize:11, fontWeight:700, cursor:"pointer",
-                  background:period===p.id?"#fff":"transparent", color:period===p.id?"#4B38C8":"#C0BCCE",
-                  boxShadow:period===p.id?"0 1px 3px rgba(0,0,0,0.12)":"none" }}>
-                {p.label}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div style={{ display:"flex", gap:8, overflowX:"auto", paddingBottom:2 }}>
-          {[{id:"all",label:"すべて",color:"#4B38C8"}, ...STATUSES].map(s => (
-            <button key={s.id} onClick={() => setFilterStatus(s.id)}
-              style={{ padding:"5px 10px", borderRadius:6, border:"none", fontSize:11, fontWeight:700, cursor:"pointer", flexShrink:0,
-                background:filterStatus===s.id?"#4B38C8":"#E9DFFE", color:filterStatus===s.id?"#fff":"#C0BCCE" }}>
-              {s.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div style={{ flex:1, overflowY:"auto", padding:"12px 24px" }}>
-        {filtered.map(p => {
-          const s = STATUSES.find(x => x.id === p.status) || STATUSES[0];
-          const diff = Math.round((new Date(p.date) - TODAY) / 86400000);
-          return (
-            <div key={p.id} className="post-row" onClick={() => onSelect(p)}
-              style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 16px", background:"#fff", borderRadius:10, marginBottom:6, cursor:"pointer", border:"1px solid #EDE8FF", transition:"background 0.1s" }}>
-              {p.recurringId && <span title="定期配信" style={{ fontSize:11, color:"#C0BCCE", flexShrink:0 }}>↻</span>}
-              <div style={{ width:3, height:36, borderRadius:2, background:s.color, flexShrink:0 }} />
-              <div style={{ flex:1, minWidth:0 }}>
-                <div style={{ fontWeight:700, fontSize:13, color:"#1A1040", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{p.title || "（タイトル未入力）"}</div>
-                <div style={{ display:"flex", gap:8, marginTop:3, flexWrap:"wrap", alignItems:"center" }}>
-                  <span style={{ fontSize:11, color:diff<0?"#EF4444":diff===0?"#D97706":"#C0BCCE", fontWeight:600 }}>
-                    {diff<0?`▲ 期限切れ ${p.date.slice(5).replace("-","/")}`:diff===0?"📍 今日":`${p.date.slice(5).replace("-","/")} (あと${diff}日)`}
-                  </span>
-                  <span style={{ color:"#7C70B8", fontSize:11 }}>{p.time}</span>
-                  {p.platforms.slice(0,3).map(pid => <PlatformChip key={pid} platformId={pid} size="xs" />)}
-                  {p.tags.slice(0,2).map(t => <span key={t} style={{ fontSize:10, color:"#C0BCCE", background:"#E9DFFE", borderRadius:4, padding:"1px 6px" }}>#{t}</span>)}
-                  {(p.postTargets||[]).slice(0,3).map(pt => {
-                    const tg = TARGETS.find(x => x.id === pt.targetId);
-                    if (!tg) return null;
-                    return <span key={pt.targetId} style={{ fontSize:9, color:tg.color, background:`${tg.color}12`, borderRadius:4, padding:"1px 6px", fontWeight:700, borderLeft:`2px solid ${tg.color}` }}>{tg.name}{pt.url?" 🔗":""}</span>;
-                  })}
-                </div>
-              </div>
-              <StatusPill status={p.status} onChange={v => onStatusChange ? onStatusChange({...p, status:v}) : setPosts(ps => ps.map(pp => pp.id===p.id?{...pp,status:v}:pp))} />
-            </div>
-          );
-        })}
-        {filtered.length === 0 && <div style={{ textAlign:"center", color:"#7A9AB5", marginTop:60, fontSize:14 }}>配信がありません</div>}
-      </div>
-    </div>
-  );
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// EDITOR PANEL
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-function EditorPanel({ post, templates, onSave, onDelete, onClose, onConvertToRecurring, onSaveAsTemplate }) {
-  const [form, setForm] = useState(post);
-  const [tab, setTab] = useState("editor");
-  const [tplOpen, setTplOpen] = useState(false);
-  const [tplSearch, setTplSearch] = useState("");
-  const filteredTpls = useMemo(() => filterTemplates(templates, tplSearch), [templates, tplSearch]);
-  const tplSearchRef = useRef(null);
-  const [copied, setCopied] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-  const textareaRef = useRef(null);
-  useEffect(() => {
-    let f = { ...post };
-    if (post.defaultTemplateId && !post.body) {
-      const tpl = templates.find(t => t.id === post.defaultTemplateId);
-      if (tpl) f = { ...f, body: tpl.body };
-    }
-    setForm(f);
-    setTab("editor");
-    setTplOpen(false);
-    setTplSearch("");
-  // templatesをdepsから除外 → templates変更時に内容がリセットされるのを防ぐ
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [post.id]);
-  const set = (k, v) => setForm(f => ({...f, [k]: v}));
-
-  const insertFormat = (before, after="") => {
-    const el = textareaRef.current; if (!el) return;
-    const start = el.selectionStart, end = el.selectionEnd, sel = form.body.slice(start, end);
-    set("body", form.body.slice(0,start) + before + sel + after + form.body.slice(end));
-    setTimeout(() => { el.focus(); el.setSelectionRange(start+before.length, start+before.length+sel.length); }, 0);
+  const addComment=()=>{
+    if(!cmt.trim())return;
+    const c={text:cmt.trim(),at:nowStr()};
+    const next=[...localComments,c];
+    setLocalComments(next);
+    onSaveComment(post.id,next);
+    setCmt("");
   };
 
-  return (
-    <div style={{ width:400, height:"100%", background:"#fff", borderLeft:"1px solid #E8E2FF", display:"flex", flexDirection:"column", flexShrink:0, overflow:"hidden", animation:"slideIn 0.18s ease" }}>
-      <div style={{ padding:"13px 18px", borderBottom:"1px solid #EDE8FF", display:"flex", alignItems:"center", justifyContent:"space-between", flexShrink:0 }}>
-        <div style={{ display:"flex", gap:2, background:"#E9DFFE", borderRadius:8, padding:2 }}>
-          {[["editor","エディタ"],["meta","設定"]].map(([id,label]) => (
-            <button key={id} onClick={() => setTab(id)}
-              style={{ padding:"5px 14px", borderRadius:6, border:"none", fontSize:12, fontWeight:700, cursor:"pointer",
-                background:tab===id?"#fff":"transparent", color:tab===id?"#4B38C8":"#C0BCCE",
-                boxShadow:tab===id?"0 1px 3px rgba(0,0,0,0.1)":"none" }}>
-              {label}
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.6)",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}
+      onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+      <div style={{background:"#fff",borderRadius:18,width:"100%",maxWidth:820,maxHeight:"90vh",overflow:"hidden",display:"flex",flexDirection:"column",boxShadow:"0 24px 80px #00000035"}}>
+
+        {/* ヘッダー */}
+        <div style={{padding:"12px 18px",borderBottom:"1px solid #e8e0d6",background:pt.bg,display:"flex",alignItems:"flex-start",gap:10,flexShrink:0}}>
+          <div style={{flex:1}}>
+            <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4,flexWrap:"wrap"}}>
+              <span style={{fontSize:11,color:pt.color,fontWeight:700,background:pt.bg,border:`1px solid ${pt.border}`,padding:"1px 8px",borderRadius:10}}>{pt.label}</span>
+              {/* ステータスはヘッダー右のセレクトで変更可 */}
+              <span style={{fontSize:11,color:"#888"}}>{post.datetime.replace("T"," ")}</span>
+            </div>
+            <div style={{fontSize:20,fontWeight:800,color:"#0f1419",lineHeight:1.3}}>{post.title||"（タイトルなし）"}</div>
+          </div>
+          <div style={{display:"flex",gap:5,flexShrink:0,flexWrap:"wrap",justifyContent:"flex-end",alignItems:"center"}}>
+            {/* ステータスをその場で変更 */}
+            <select value={post.status} onChange={e=>onChangeStatus(post.id,e.target.value)}
+              style={{border:`1.5px solid ${st?.border}`,borderRadius:20,padding:"4px 10px",fontSize:11,fontWeight:700,color:st?.text,background:st?.chip,cursor:"pointer",fontFamily:"inherit",outline:"none"}}>
+              {Object.entries(STATUS).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
+            </select>
+            <button onClick={()=>onEdit(post)} style={{background:"#f59e0b",border:"none",borderRadius:8,padding:"6px 12px",fontSize:11,fontWeight:700,color:"#fff",cursor:"pointer",fontFamily:"inherit"}}>✏️ 編集</button>
+            <button onClick={()=>onDuplicate(post)} style={{background:"none",border:"1.5px solid #e0d8ce",borderRadius:8,padding:"6px 10px",fontSize:11,fontWeight:600,color:"#536471",cursor:"pointer",fontFamily:"inherit"}}
+              onMouseEnter={e=>e.currentTarget.style.background="#f3f4f6"} onMouseLeave={e=>e.currentTarget.style.background="none"}>📋 複製</button>
+            <button onClick={()=>onRepost(post)} style={{background:"none",border:"1.5px solid #e0d8ce",borderRadius:8,padding:"6px 10px",fontSize:11,fontWeight:600,color:"#536471",cursor:"pointer",fontFamily:"inherit"}}
+              onMouseEnter={e=>{e.currentTarget.style.background="#f59e0b";e.currentTarget.style.color="#fff";e.currentTarget.style.borderColor="#f59e0b";}} onMouseLeave={e=>{e.currentTarget.style.background="none";e.currentTarget.style.color="#536471";e.currentTarget.style.borderColor="#e0d8ce";}}>🔁 再投稿</button>
+            <button onClick={()=>onDelete(post)} style={{background:"none",border:"1.5px solid #fca5a5",borderRadius:8,padding:"6px 10px",fontSize:11,fontWeight:600,color:"#ef4444",cursor:"pointer",fontFamily:"inherit"}}
+              onMouseEnter={e=>e.currentTarget.style.background="#fef2f2"} onMouseLeave={e=>e.currentTarget.style.background="none"}>🗑️ 削除</button>
+            <button onClick={onClose} style={{background:"none",border:"1.5px solid #e0d8ce",borderRadius:8,padding:"6px 10px",fontSize:12,fontWeight:600,color:"#888",cursor:"pointer",fontFamily:"inherit"}}>✕</button>
+          </div>
+        </div>
+
+        {/* コンテンツ */}
+        <div style={{flex:1,display:"flex",overflow:"hidden"}}>
+          {/* 本文 */}
+          <div style={{flex:1,overflowY:"auto",padding:"24px 32px"}}>
+            {(post.memoLinks||[]).length>0&&(
+              <div style={{marginBottom:14,display:"flex",flexDirection:"column",gap:4}}>
+                {post.memoLinks.map((l,i)=>{
+                  const url=typeof l==="string"?l:l.url;
+                  const label=typeof l==="string"?"":l.label;
+                  return(
+                    <a key={i} href={url} target="_blank" rel="noreferrer"
+                      style={{display:"flex",alignItems:"center",gap:5,background:"#f0f9ff",border:"1px solid #bae6fd",borderRadius:7,padding:"5px 10px",fontSize:"0.78em",color:"#0369a1",textDecoration:"none"}}>
+                      <span style={{flexShrink:0}}>🔗</span>
+                      <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{label||url}</span>
+                    </a>
+                  );
+                })}
+              </div>
+            )}
+            {post.memo&&<div style={{background:"#fffbeb",border:"1px solid #fde68a",borderRadius:8,padding:"8px 12px",fontSize:"0.8em",color:"#92400e",lineHeight:1.6,marginBottom:16}}>{post.memo}</div>}
+            {/* ⚠️ XSS: 信頼済みユーザーのみ。不特定多数が使う場合はDOMPurifyでサニタイズ */}
+            <div className="xb" dangerouslySetInnerHTML={{__html:post.body||"<p style='color:#aaa'>本文はまだありません</p>"}}/>
+          </div>
+
+          {/* コメント */}
+          <div style={{width:260,borderLeft:"1px solid #e8e0d6",display:"flex",flexDirection:"column",flexShrink:0,background:"#fafafa"}}>
+            <div style={{padding:"12px 13px 9px",borderBottom:"1px solid #e8e0d6",fontWeight:700,fontSize:"0.8em",color:"#0f1419"}}>コメント ({localComments.length})</div>
+            <div style={{flex:1,overflowY:"auto",padding:"10px 12px"}}>
+              {localComments.length===0&&<div style={{fontSize:"0.78em",color:"#ccc",textAlign:"center",paddingTop:20}}>コメントなし</div>}
+              {localComments.map((c,i)=>(
+                <div key={i} style={{background:"#fff",border:"1px solid #e8e0d6",borderRadius:8,padding:"7px 10px",marginBottom:7}}>
+                  <div style={{fontSize:"0.8em",color:"#444",lineHeight:1.5}}>{typeof c==="string"?c:c.text}</div>
+                  {c.at&&<div style={{fontSize:"0.68em",color:"#aaa",marginTop:3}}>{new Date(c.at).toLocaleString("ja-JP",{month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"})}</div>}
+                </div>
+              ))}
+            </div>
+            <div style={{padding:"10px 12px",borderTop:"1px solid #e8e0d6",flexShrink:0}}>
+              <div style={{display:"flex",gap:5}}>
+                <input value={cmt} onChange={e=>setCmt(e.target.value)}
+                  onKeyDown={e=>{if(e.key==="Enter"&&!e.isComposing)addComment();}}
+                  placeholder="コメントを追加…"
+                  style={{flex:1,background:"#fff",border:"1.5px solid #e0d8ce",borderRadius:8,padding:"7px 9px",fontSize:"0.78em",outline:"none",fontFamily:"inherit"}}
+                  onFocus={e=>e.target.style.borderColor="#f59e0b"} onBlur={e=>e.target.style.borderColor="#e0d8ce"}/>
+                <button onClick={addComment} style={{background:"#f59e0b",border:"none",borderRadius:8,padding:"7px 10px",fontSize:"0.78em",fontWeight:700,color:"#fff",cursor:"pointer",fontFamily:"inherit",flexShrink:0}}>追加</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════
+// アカウント設定
+// ════════════════════════════════════════════════════════
+function AccountSettings({accounts,onUpdate,onDelete,onAdd,onCopyLink,onClose}){
+  const [editingId,setEditingId]=useState(null),[draft,setDraft]=useState({});
+  function startEdit(acc){setEditingId(acc.id);setDraft({name:acc.name,handle:acc.handle,color:acc.color});}
+  function commitEdit(){onUpdate(editingId,draft);setEditingId(null);}
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:500,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+      <div style={{background:"#fff",border:"2px solid #e8e0d6",borderRadius:17,width:"100%",maxWidth:520,maxHeight:"85vh",overflow:"hidden",display:"flex",flexDirection:"column",boxShadow:"0 20px 60px #00000025"}}>
+        <div style={{padding:"15px 20px",borderBottom:"1px solid #e8e0d6",display:"flex",alignItems:"center",justifyContent:"space-between",background:"#faf7f3"}}>
+          <div>
+            <div style={{fontSize:15,fontWeight:900}}>クライアント管理</div>
+            <div style={{fontSize:11,color:"#aaa",marginTop:2}}>名前・カラーを編集できます</div>
+          </div>
+          <Btn onClick={onClose}>閉じる</Btn>
+        </div>
+        <div style={{flex:1,overflowY:"auto",padding:20}}>
+          {accounts.map(acc=>(
+            <div key={acc.id} style={{background:"#faf7f3",border:"1.5px solid #e8e0d6",borderRadius:12,padding:"14px 16px",marginBottom:10}}>
+              {editingId===acc.id?(
+                <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                  <div style={{display:"flex",gap:8}}>
+                    <div style={{flex:1}}><label style={{fontSize:11,color:"#999",fontWeight:700,display:"block",marginBottom:4}}>クライアント名</label><input value={draft.name} onChange={e=>setDraft(d=>({...d,name:e.target.value}))} style={INP}/></div>
+                    <div style={{flex:1}}><label style={{fontSize:11,color:"#999",fontWeight:700,display:"block",marginBottom:4}}>ハンドル</label><input value={draft.handle} onChange={e=>setDraft(d=>({...d,handle:e.target.value}))} style={INP} placeholder="@handle"/></div>
+                  </div>
+                  <div>
+                    <label style={{fontSize:11,color:"#999",fontWeight:700,display:"block",marginBottom:6}}>カラー</label>
+                    <div style={{display:"flex",gap:6}}>
+                      {COLORS.map(c=><button key={c} onClick={()=>setDraft(d=>({...d,color:c}))} style={{width:26,height:26,borderRadius:"50%",background:c,border:draft.color===c?"3px solid #1a1a1a":"3px solid transparent",cursor:"pointer"}}/>)}
+                    </div>
+                  </div>
+                  <div style={{display:"flex",gap:7}}><Btn primary onClick={commitEdit} style={{flex:1}}>保存</Btn><Btn onClick={()=>setEditingId(null)}>キャンセル</Btn></div>
+                </div>
+              ):(
+                <div>
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+                    <span style={{width:10,height:10,borderRadius:"50%",background:acc.color,display:"inline-block"}}/>
+                    <span style={{fontWeight:800,fontSize:14}}>{acc.name}</span>
+                    <span style={{fontSize:12,color:"#bbb"}}>{acc.handle}</span>
+                  </div>
+                  <div style={{background:"#fff",border:"1px solid #e8e0d6",borderRadius:7,padding:"6px 10px",fontSize:11,color:"#bbb",fontFamily:"monospace",marginBottom:10,wordBreak:"break-all"}}>
+                    {typeof window!=="undefined"?window.location.href.split("?")[0]:"https://your-app.vercel.app/"}?account={acc.id}
+                  </div>
+                  <div style={{display:"flex",gap:6}}>
+                    <Btn onClick={()=>startEdit(acc)} style={{flex:1}}>編集</Btn>
+                    <button onClick={()=>onCopyLink(acc.id)} style={{flex:1,background:"#f59e0b",border:"none",borderRadius:8,padding:"6px 12px",fontSize:12,fontWeight:700,color:"#fff",cursor:"pointer"}}>リンクをコピー</button>
+                    {accounts.length>1&&<Btn danger onClick={()=>onDelete(acc.id)}>削除</Btn>}
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+          <button onClick={onAdd}
+            style={{width:"100%",background:"#fff",border:"2px dashed #e0d8ce",borderRadius:10,padding:"11px",color:"#bbb",cursor:"pointer",fontSize:13,transition:"all 0.15s"}}
+            onMouseEnter={e=>{e.currentTarget.style.borderColor="#f59e0b";e.currentTarget.style.color="#f59e0b";}}
+            onMouseLeave={e=>{e.currentTarget.style.borderColor="#e0d8ce";e.currentTarget.style.color="#bbb";}}>
+            + クライアントを追加
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════
+// メインアプリ
+// ════════════════════════════════════════════════════════
+const {isClient:_isClient,accountId:_urlAccountId}=getUrlParams();
+
+export default function App(){
+  const isClient=_isClient,urlAccountId=_urlAccountId;
+  const isAdmin=!isClient;
+
+  const [accounts,           setAccounts]          = useState([]);
+  const [allPosts,           setAllPosts]           = useState({});
+  const [activeAccId,        setActiveAccId]        = useState(urlAccountId||null);
+  const [view,               setView]               = useState("calendar");
+  const [week,               setWeek]               = useState(new Date());
+  const [preview,            setPreview]            = useState(null);
+  const [editing,            setEditing]            = useState(null);
+  const [filterStatus,       setFilter]             = useState("all");
+  const [showShare,          setShowShare]          = useState(false);
+  const [showAccountSettings,setShowAccountSettings]= useState(false);
+  const [toast,              setToast]              = useState(null);
+  const [loading,            setLoading]            = useState(true);
+  const [showSearch,         setShowSearch]         = useState(false);
+  const [repostTgt,          setRepostTgt]          = useState(null);
+  const [deleteConfirm,      setDeleteConfirm]      = useState(null);
+  const [slots,              setSlots]              = useState([]); // 予約枠 [{id,dow,hour,postType}]
+  const [showSlotSettings,   setShowSlotSettings]   = useState(false);
+  const [dragId,             setDragId]             = useState(null); // ⑧ DnD
+  const [dragOver,           setDragOver]           = useState(null); // ⑧ ドラッグ中セルkey
+  const [showNotifySettings, setShowNotifySettings] = useState(false); // メール通知設定
+  const [notifySettings,     setNotifySettings]     = useState(null); // {email,notify_overdue,notify_today,notify_daily,send_hour,enabled}
+  const shareRef=useRef(null);
+  useEffect(()=>{
+    if(!showShare)return;
+    const h=e=>{if(shareRef.current&&!shareRef.current.contains(e.target))setShowShare(false);};
+    document.addEventListener("mousedown",h);
+    return()=>document.removeEventListener("mousedown",h);
+  },[showShare]);
+
+  const today    =React.useMemo(()=>fmtDate(new Date()),[]);
+  const nowDt    =React.useMemo(()=>new Date().toISOString().slice(0,16),[]);
+  const weekDates   =React.useMemo(()=>getWeekDates(week),[week]);
+  const weekDateStrs=React.useMemo(()=>weekDates.map(fmtDate),[weekDates]);
+  const activeAcc=React.useMemo(()=>accounts.find(a=>a.id===activeAccId),[accounts,activeAccId]);
+  const posts    =React.useMemo(()=>allPosts[activeAccId]||[],[allPosts,activeAccId]);
+  const filtered =React.useMemo(()=>filterStatus==="all"?posts:posts.filter(p=>p.status===filterStatus),[posts,filterStatus]);
+  // ⑨ 未投稿アラート：予約済みのまま期限が過ぎた投稿数
+  const overdueCount=React.useMemo(()=>
+    posts.filter(p=>p.status===OVERDUE_STATUS&&p.datetime<=nowDt).length
+  ,[posts,nowDt]);
+
+  // ── ロード ──
+  useEffect(()=>{
+    async function load(){
+      setLoading(true);
+      const{data:accs}=await supabase.from("accounts").select("*").order("created_at");
+      if(accs&&accs.length>0){
+        setAccounts(accs);
+        const firstId=urlAccountId||accs[0].id;
+        setActiveAccId(firstId);
+        const targetIds=isClient?[firstId]:accs.map(a=>a.id);
+        const{data:ps}=await supabase.from("posts").select("*").in("account_id",targetIds);
+        if(ps){
+          const grouped={};
+          ps.forEach(p=>{
+            if(!grouped[p.account_id])grouped[p.account_id]=[];
+            grouped[p.account_id].push(dbToPost(p));
+          });
+          setAllPosts(grouped);
+        }
+      }
+      setLoading(false);
+    }
+    load();
+  },[]);
+
+  const showToast=React.useCallback((msg)=>{setToast(msg);setTimeout(()=>setToast(null),2500);},[]);
+
+  // ── DB保存（内部共通） ──
+  const saveToDb=React.useCallback(async(p)=>{
+    const record={
+      id:p.id,account_id:activeAccId,
+      title:p.title,status:p.status,
+      post_type:p.postType||"x_post",
+      datetime:p.datetime,
+      body:p.body||"",
+      memo:p.memo||"",
+      memo_links:p.memoLinks||[],
+      comments:p.comments||[],
+      history:p.history||[],
+    };
+    const{error}=await supabase.from("posts").upsert(record);
+    if(error){showToast("保存に失敗しました");return false;}
+    setAllPosts(prev=>{
+      const cur=prev[activeAccId]||[];
+      const exists=cur.find(x=>x.id===p.id);
+      return{...prev,[activeAccId]:exists?cur.map(x=>x.id===p.id?p:x):[...cur,p]};
+    });
+    return true;
+  },[activeAccId,showToast]);
+
+  const save=React.useCallback(async(p)=>{
+    const ok=await saveToDb(p);
+    if(!ok)return;
+    setEditing(null);setPreview(p);
+    showToast("保存しました ✅");
+  },[saveToDb,showToast]);
+
+  const del=React.useCallback(async(id)=>{
+    const{error}=await supabase.from("posts").delete().eq("id",id);
+    if(error){showToast("削除に失敗しました");return;}
+    setAllPosts(prev=>({...prev,[activeAccId]:(prev[activeAccId]||[]).filter(p=>p.id!==id)}));
+    setPreview(null);setDeleteConfirm(null);
+    showToast("削除しました 🗑️");
+  },[activeAccId,showToast]);
+
+  const changeStatus=React.useCallback(async(id,s)=>{
+    const{error}=await supabase.from("posts").update({status:s}).eq("id",id);
+    if(error){showToast("更新に失敗しました");return;}
+    setAllPosts(prev=>({...prev,[activeAccId]:(prev[activeAccId]||[]).map(p=>p.id===id?{...p,status:s}:p)}));
+    setPreview(prev=>prev&&prev.id===id?{...prev,status:s}:prev);
+  },[activeAccId,showToast]);
+
+  const saveComment=React.useCallback(async(id,comments)=>{
+    const{error}=await supabase.from("posts").update({comments}).eq("id",id);
+    if(error){showToast("コメントの保存に失敗しました");return;}
+    setAllPosts(prev=>({...prev,[activeAccId]:(prev[activeAccId]||[]).map(p=>p.id===id?{...p,comments}:p)}));
+    setPreview(prev=>prev&&prev.id===id?{...prev,comments}:prev);
+  },[activeAccId,showToast]);
+
+  const handleRepost=React.useCallback(async(p,dt,repeat)=>{
+    const newPost={
+      ...p,id:genId(),datetime:dt,status:"draft",
+      title:repeat!=="none"?`【再】${p.title}`:p.title,
+      history:[{at:nowStr(),note:`「${p.title}」から再投稿${repeat!=="none"?` (${repeat})`:""}`}],
+      comments:[],
+    };
+    const ok=await saveToDb(newPost);
+    if(!ok)return;
+    setRepostTgt(null);
+    showToast("再投稿を作成しました ✅");
+  },[saveToDb,showToast]);
+
+  const handleDuplicate=React.useCallback(async(p)=>{
+    const newPost={
+      ...p,id:genId(),
+      datetime:nextDaySameTime(p.datetime),
+      status:"draft",
+      title:`【複製】${p.title}`,
+      history:[{at:nowStr(),note:`「${p.title}」を複製`}],
+      comments:[],
+    };
+    const ok=await saveToDb(newPost);
+    if(!ok)return;
+    setPreview(null);
+    showToast("翌日同時刻に複製しました ✅");
+  },[saveToDb,showToast]);
+
+  const addAccount=React.useCallback(async()=>{
+    const id="acc_"+Date.now();
+    const acc={id,name:"新規クライアント",handle:"@handle",color:"#6b7280"};
+    const{error}=await supabase.from("accounts").insert(acc);
+    if(error){showToast("追加に失敗しました");return;}
+    setAccounts(prev=>[...prev,acc]);
+    setAllPosts(prev=>({...prev,[id]:[]}));
+    setActiveAccId(id);setShowAccountSettings(true);
+  },[showToast]);
+
+  const updateAccount=React.useCallback(async(id,fields)=>{
+    const{error}=await supabase.from("accounts").update(fields).eq("id",id);
+    if(error){showToast("更新に失敗しました");return;}
+    setAccounts(prev=>prev.map(a=>a.id===id?{...a,...fields}:a));
+  },[showToast]);
+
+  const deleteAccount=React.useCallback(async(id)=>{
+    setAccounts(prev=>{
+      if(prev.length<=1){showToast("最後のアカウントは削除できません");return prev;}
+      return prev; // 非同期処理はsetAccountsの外でやるため、ここでは何もしない
+    });
+    // 改めて現在のaccountsを参照するため非同期処理はuseRefで管理せずシンプルに実施
+    const cur=await supabase.from("accounts").select("*").order("created_at").then(r=>r.data||[]);
+    if(cur.length<=1){showToast("最後のアカウントは削除できません");return;}
+    const{error}=await supabase.from("accounts").delete().eq("id",id);
+    if(error){showToast("削除に失敗しました");return;}
+    const remaining=cur.filter(a=>a.id!==id);
+    setAccounts(remaining);
+    setAllPosts(prev=>{const n={...prev};delete n[id];return n;});
+    setActiveAccId(prev=>prev===id?remaining[0]?.id:prev);
+  },[showToast]);
+
+  const copyShareLink=React.useCallback((accId)=>{
+    const base=window.location.href.split("?")[0];
+    navigator.clipboard.writeText(`${base}?account=${accId}`)
+      .then(()=>showToast("共有リンクをコピーしました"))
+      .catch(()=>showToast("コピー完了"));
+  },[showToast]);
+  const openNew=React.useCallback((datetime,{title="",postType="x_post"}={})=>{
+    setEditing({id:genId(),title,status:"draft",postType,datetime:datetime||`${today}T07:00`,body:"",memo:"",memoLinks:[],comments:[],history:[]});
+  },[today]);
+
+  // 予約枠 — アカウントごとにlocalStorageで永続化
+  useEffect(()=>{
+    if(!activeAccId)return;
+    try{const saved=localStorage.getItem(`slots_${activeAccId}`);setSlots(saved?JSON.parse(saved):[]);}catch(e){setSlots([]);}
+  },[activeAccId]);
+
+  const saveSlots=React.useCallback((next)=>{
+    // nextが関数の場合はfunctional update形式で呼ぶ
+    if(typeof next==="function"){
+      setSlots(prev=>{
+        const resolved=next(prev);
+        if(activeAccId)try{localStorage.setItem(`slots_${activeAccId}`,JSON.stringify(resolved));}catch(e){}
+        return resolved;
+      });
+    } else {
+      setSlots(next);
+      if(activeAccId)try{localStorage.setItem(`slots_${activeAccId}`,JSON.stringify(next));}catch(e){}
+    }
+  },[activeAccId]);
+
+  // ⑧ ドラッグ&ドロップ：投稿を別セルにドロップして日時変更
+  const handleDrop=React.useCallback(async(postId,dateStr,hour)=>{
+    const p=posts.find(x=>x.id===postId);
+    if(!p)return;
+    const newDt=`${dateStr}T${String(hour).padStart(2,"0")}:00`;
+    if(p.datetime===newDt)return;
+    const updated={...p,datetime:newDt,history:[...(p.history||[]),{at:nowStr(),note:`${p.datetime}→${newDt} (DnD)`}]};
+    await saveToDb(updated);
+    showToast("日時を変更しました 📅");
+    setDragId(null);setDragOver(null);
+  },[posts,saveToDb,showToast]);
+
+  const saveNotifySettings=React.useCallback(async(s)=>{
+    setNotifySettings(s);
+    await supabase.from("notification_settings").upsert({...s,account_id:activeAccId});
+    showToast("通知設定を保存しました ✅");
+  },[activeAccId,showToast]);
+
+  // メール通知設定ロード
+  useEffect(()=>{
+    if(!activeAccId)return;
+    supabase.from("notification_settings").select("*").eq("account_id",activeAccId).single()
+      .then(({data})=>{
+        if(data)setNotifySettings(data);
+        else setNotifySettings({account_id:activeAccId,email:"",notify_overdue:true,notify_today:true,notify_daily:false,send_hour:8,enabled:false});
+      });
+  },[activeAccId]);
+
+  const handleTestSend=React.useCallback(async(email)=>{
+    if(!email){alert("メールアドレスを入力してください");return;}
+    try{
+      const res=await fetch("/api/cron-notify",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({accountId:activeAccId,testMode:true,email}),
+      });
+      const d=await res.json();
+      if(res.ok)showToast("テストメールを送信しました ✅");
+      else alert("送信失敗:\n"+(d.error||JSON.stringify(d)));
+    }catch(e){
+      alert("通信エラー: "+e.message);
+    }
+  },[activeAccId,showToast]);
+
+
+  useEffect(()=>{
+    const h=e=>{
+      // ⌘K 検索
+      if((e.metaKey||e.ctrlKey)&&e.key==="k"){e.preventDefault();setShowSearch(true);return;}
+      // 入力中・修飾キーは無視
+      const tag=e.target.tagName;
+      if(tag==="INPUT"||tag==="TEXTAREA"||e.target.contentEditable==="true")return;
+      if(e.metaKey||e.ctrlKey||e.altKey)return;
+      switch(e.key){
+        case"n":case"N": e.preventDefault();openNew();break;
+        case"ArrowLeft":
+          if(view==="calendar"){e.preventDefault();setWeek(d=>{const x=new Date(d);x.setDate(x.getDate()-7);return x;});}
+          break;
+        case"ArrowRight":
+          if(view==="calendar"){e.preventDefault();setWeek(d=>{const x=new Date(d);x.setDate(x.getDate()+7);return x;});}
+          break;
+        case"c":case"C": e.preventDefault();setView(v=>v==="calendar"?"month":v==="month"?"list":"calendar");break;
+        case"e":case"E":
+          if(preview){e.preventDefault();setPreview(null);setEditing({...preview});}
+          break;
+        case"Escape": setPreview(null);break;
+        default:break;
+      }
+    };
+    window.addEventListener("keydown",h);return()=>window.removeEventListener("keydown",h);
+  },[view,preview,openNew]);
+
+  const postsBySlot=React.useMemo(()=>{
+    const m={};
+    filtered.forEach(p=>{
+      const key=`${p.datetime.slice(0,10)}_${p.datetime.slice(11,13)}`;
+      (m[key]=m[key]||[]).push(p);
+    });
+    return m;
+  },[filtered]);
+
+  const ghostBySlot=React.useMemo(()=>{
+    const m={};
+    weekDates.forEach((date,i)=>{
+      slots.filter(s=>slotMatchesDate(s,date)).forEach(s=>{
+        const key=`${weekDateStrs[i]}_${String(s.hour).padStart(2,"0")}`;
+        (m[key]=m[key]||[]).push(s);
+      });
+    });
+    return m;
+  },[weekDates,weekDateStrs,slots]);
+
+  if(loading)return(
+    <div style={{height:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#f2ede6",fontFamily:"'Hiragino Sans', sans-serif"}}>
+      <div style={{textAlign:"center"}}>
+        <div style={{fontSize:20,fontWeight:900,color:"#1a1a1a",marginBottom:8}}>Content<span style={{color:"#f59e0b"}}>OS</span></div>
+        <div style={{fontSize:13,color:"#aaa"}}>読み込み中…</div>
+      </div>
+    </div>
+  );
+
+  return(
+    <div style={{fontFamily:`'Hiragino Sans','Noto Sans JP',${XFONT}`,background:"#f2ede6",minHeight:"100vh",color:"#1a1a1a"}}>
+      <style>{`
+        *{box-sizing:border-box;margin:0;padding:0;}
+        ::-webkit-scrollbar{width:4px;height:4px;}::-webkit-scrollbar-thumb{background:#d1d5db;border-radius:2px;}
+        .xb{outline:none;}
+        .xb:empty:before,.xb[data-ph]:empty:before{content:attr(data-ph);color:#8b98a5;pointer-events:none;}
+        .xb p,.xb div{font-size:17px;line-height:1.75;color:#0f1419;margin:0 0 1.3em;}
+        .xb p:last-child,.xb div:last-child{margin-bottom:0;}
+        .xb br{display:block;height:0;}
+        .xb h1{font-size:28px;font-weight:800;line-height:1.3;margin:1.2em 0 .5em;color:#0f1419;}
+        .xb h2{font-size:20px;font-weight:700;line-height:1.4;margin:1em 0 .4em;color:#0f1419;}
+        .xb ul{list-style:disc;padding-left:1.5em;margin:.6em 0 1.2em;}
+        .xb ol{list-style:decimal;padding-left:1.5em;margin:.6em 0 1.2em;}
+        .xb li{font-size:17px;line-height:1.75;color:#0f1419;margin:.15em 0;}
+        .xb ul ul,.xb ol ul{list-style:circle;padding-left:1.5em;margin:.2em 0;}
+        .xb ul ul ul,.xb ol ul ul{list-style:square;}
+        .xb blockquote{border-left:3px solid #cfd9de;padding:4px 0 4px 16px;margin:.8em 0 1.2em;color:#536471;font-style:italic;font-size:17px;line-height:1.75;}
+        .xb a{color:#1d9bf0;text-decoration:underline;}
+        .xb hr{border:none;border-top:1px solid #eff3f4;margin:1.5em 0;}
+        .xb strong,.xb b{font-weight:700;}
+        .xb em,.xb i{font-style:italic;}
+        .xb s{text-decoration:line-through;}
+        .xb img{max-width:100%;border-radius:8px;margin:.6em 0;display:block;}
+      `}</style>
+
+      {/* ── ヘッダー ── */}
+      <div style={{background:"#fff",borderBottom:"2px solid #e8e0d6",padding:"0 14px",display:"flex",alignItems:"center",gap:8,height:52,boxShadow:"0 1px 4px #0000000a",flexShrink:0,overflow:"hidden"}}>
+        <span style={{fontWeight:900,fontSize:17,letterSpacing:"-0.5px",flexShrink:0}}>Content<span style={{color:"#f59e0b"}}>OS</span></span>
+
+        {/* 管理者：アカウントタブ */}
+        {isAdmin&&(
+          <div style={{display:"flex",gap:3,background:"#f2ede6",borderRadius:10,padding:3,maxWidth:420,overflow:"auto",flexShrink:0}}>
+            {accounts.map(acc=>(
+              <button key={acc.id} onClick={()=>{setActiveAccId(acc.id);setPreview(null);}}
+                style={{display:"flex",alignItems:"center",gap:5,padding:"5px 10px",borderRadius:7,border:"none",cursor:"pointer",fontWeight:700,fontSize:12,background:activeAccId===acc.id?"#fff":"transparent",color:activeAccId===acc.id?"#1a1a1a":"#aaa",boxShadow:activeAccId===acc.id?"0 1px 4px #0000001a":"none",whiteSpace:"nowrap",fontFamily:"inherit"}}>
+                <span style={{width:7,height:7,borderRadius:"50%",background:activeAccId===acc.id?acc.color:"#ddd",display:"inline-block"}}/>
+                {acc.name}
+              </button>
+            ))}
+            <button onClick={addAccount}
+              style={{padding:"5px 9px",borderRadius:7,border:"1px dashed #ccc",cursor:"pointer",fontSize:12,background:"transparent",color:"#bbb",whiteSpace:"nowrap",fontFamily:"inherit"}}
+              onMouseEnter={e=>{e.currentTarget.style.borderColor="#f59e0b";e.currentTarget.style.color="#f59e0b";}}
+              onMouseLeave={e=>{e.currentTarget.style.borderColor="#ccc";e.currentTarget.style.color="#bbb";}}>
+              + 追加
+            </button>
+          </div>
+        )}
+
+        {/* 共有リンクバッジ */}
+        {isClient&&(
+          <div style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
+            <span style={{width:8,height:8,borderRadius:"50%",background:activeAcc?.color,display:"inline-block"}}/>
+            <span style={{fontWeight:700,fontSize:14}}>{activeAcc?.name}</span>
+            <span style={{fontSize:11,color:"#3ea8ff",background:"#e8f4ff",border:"1px solid #93c9fc",padding:"2px 8px",borderRadius:10}}>共有リンク</span>
+          </div>
+        )}
+
+        {/* 種類凡例（ドットのみ） */}
+        <div style={{display:"flex",alignItems:"center",gap:5,marginLeft:4,background:"#f7f9f9",border:"1px solid #e8e0d6",borderRadius:20,padding:"5px 10px",flexShrink:0}}>
+          {Object.entries(POST_TYPE).map(([k,v])=>(
+            <span key={k} title={v.label} style={{width:9,height:9,borderRadius:"50%",background:v.dot,cursor:"default",display:"block",flexShrink:0}}/>
+          ))}
+        </div>
+
+        {/* 右側コントロール */}
+        <div style={{marginLeft:"auto",display:"flex",gap:6,alignItems:"center",flexShrink:0}}>
+          <button onClick={()=>setShowSearch(true)}
+            style={{display:"flex",alignItems:"center",gap:4,border:"1.5px solid #e0d8ce",background:"#f7f9f9",borderRadius:20,padding:"5px 11px",fontSize:12,color:"#888",cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+            🔍 検索<span style={{fontSize:10,color:"#ccc",background:"#fff",border:"1px solid #e0d8ce",borderRadius:4,padding:"1px 5px",marginLeft:2}}>⌘K</span>
+          </button>
+          <div style={{display:"flex",background:"#f2ede6",borderRadius:9,padding:3,gap:2,flexShrink:0}}>
+            {[["calendar","カレンダー"],["month","マンスリー"],["list","リスト"]].map(([v,l])=>(
+              <button key={v} onClick={()=>setView(v)} style={{padding:"5px 11px",borderRadius:6,border:"none",cursor:"pointer",fontSize:12,fontWeight:600,background:view===v?"#fff":"transparent",color:view===v?"#1a1a1a":"#aaa",boxShadow:view===v?"0 1px 4px #0000001a":"none",whiteSpace:"nowrap",fontFamily:"inherit"}}>{l}</button>
+            ))}
+          </div>
+          {isAdmin&&(
+            <>
+              {/* ⑨ 未投稿アラートバッジ */}
+              {overdueCount>0&&(
+                <div style={{display:"flex",alignItems:"center",gap:4,background:"#fef2f2",border:"1.5px solid #fca5a5",borderRadius:20,padding:"4px 10px",fontSize:11,fontWeight:700,color:"#dc2626",cursor:"pointer",flexShrink:0}}
+                  title={`予約済みで期限切れの投稿が${overdueCount}件あります`}
+                  onClick={()=>setFilter("reserved")}>
+                  ⚠️ {overdueCount}件 未投稿
+                </div>
+              )}
+              <Btn onClick={()=>setShowSlotSettings(true)}>予約枠</Btn>
+              <Btn onClick={()=>setShowNotifySettings(true)}>🔔 通知</Btn>
+              <Btn onClick={()=>setShowAccountSettings(true)}>設定</Btn>
+              <div ref={shareRef} style={{position:"relative"}}>
+                <Btn onClick={()=>setShowShare(s=>!s)}>共有</Btn>
+                {showShare&&(
+                  <div style={{position:"absolute",right:0,top:"calc(100% + 8px)",background:"#fff",border:"1.5px solid #e8e0d6",borderRadius:12,padding:16,zIndex:100,width:300,boxShadow:"0 8px 24px #0000001a"}}>
+                    <div style={{fontSize:13,fontWeight:800,marginBottom:6}}>クライアント共有リンク</div>
+                    <div style={{fontSize:12,color:"#888",marginBottom:12,lineHeight:1.6}}>リンクを送ると編集・コメント・投稿が可能です。</div>
+                    {accounts.map(acc=>(
+                      <div key={acc.id} style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,padding:"8px 10px",background:"#faf7f3",borderRadius:8,border:"1px solid #e8e0d6"}}>
+                        <span style={{width:7,height:7,borderRadius:"50%",background:acc.color,flexShrink:0}}/>
+                        <span style={{fontSize:13,fontWeight:700,flex:1}}>{acc.name}</span>
+                        <button onClick={()=>copyShareLink(acc.id)} style={{background:"#f59e0b",border:"none",borderRadius:6,padding:"4px 10px",fontSize:11,fontWeight:700,color:"#fff",cursor:"pointer"}}>コピー</button>
+                      </div>
+                    ))}
+                    <Btn onClick={()=>setShowShare(false)} style={{width:"100%",marginTop:4}}>閉じる</Btn>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+          <button onClick={()=>openNew()} style={{background:"#f59e0b",border:"none",borderRadius:20,padding:"7px 15px",fontSize:12,fontWeight:800,color:"#fff",cursor:"pointer",whiteSpace:"nowrap",fontFamily:"inherit",flexShrink:0}}>＋ 新規作成</button>
+        </div>
+      </div>
+
+      {/* ── カレンダーナビ ── */}
+      {view==="calendar"&&(
+        <div style={{background:"#fff",borderBottom:"1px solid #e8e0d6",padding:"6px 18px",display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
+          {activeAcc&&<span style={{width:8,height:8,borderRadius:"50%",background:activeAcc.color,display:"inline-block"}}/>}
+          <span style={{fontWeight:800,fontSize:13,color:"#444"}}>{activeAcc?.name}</span>
+          <Btn onClick={()=>{const d=new Date(week);d.setDate(d.getDate()-7);setWeek(d);}}>‹</Btn>
+          <span style={{fontWeight:700,fontSize:13,minWidth:175,textAlign:"center",color:"#555"}}>
+            {weekDates[0].getMonth()+1}月{weekDates[0].getDate()}日 〜 {weekDates[6].getMonth()+1}月{weekDates[6].getDate()}日
+          </span>
+          <Btn onClick={()=>{const d=new Date(week);d.setDate(d.getDate()+7);setWeek(d);}}>›</Btn>
+          <Btn onClick={()=>setWeek(new Date())}>今週</Btn>
+          <select value={filterStatus} onChange={e=>setFilter(e.target.value)}
+            style={{background:"#f8f4ef",border:"1.5px solid #e0d8ce",borderRadius:7,padding:"4px 8px",fontSize:11,color:"#666",outline:"none",cursor:"pointer",marginLeft:"auto"}}>
+            <option value="all">すべて</option>
+            {Object.entries(STATUS).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
+          </select>
+        </div>
+      )}
+
+      {/* ── カレンダービュー ── */}
+      {view==="calendar"&&(
+        <div style={{height:"calc(100vh - 100px)",overflow:"auto"}}>
+          <div style={{display:"grid",gridTemplateColumns:"48px repeat(7, 1fr)",minWidth:860}}>
+            <div style={{background:"#fff",position:"sticky",top:0,zIndex:20,borderRight:"1px solid #e8e0d6",borderBottom:"2px solid #e8e0d6"}}/>
+            {weekDates.map((date,i)=>{
+              const dateStr=weekDateStrs[i];
+              const isToday=dateStr===today;
+              const dayPosts=filtered.filter(p=>p.datetime.startsWith(dateStr));
+              const draftCnt=dayPosts.filter(p=>p.status==="draft").length;
+              const reservedCnt=dayPosts.filter(p=>p.status==="reserved"||p.status==="waiting").length;
+              const publishedCnt=dayPosts.filter(p=>p.status==="published"||p.status==="popular").length;
+              const ghostCnt=slots.filter(s=>slotMatchesDate(s,date)).length;
+              return(
+                <div key={i} style={{background:"#fff",padding:"6px 5px 4px",textAlign:"center",borderBottom:"2px solid #e8e0d6",borderRight:"1px solid #e8e0d6",position:"sticky",top:0,zIndex:20}}>
+                  <div style={{fontSize:11,fontWeight:700,color:isToday?"#f59e0b":i>=5?"#ef4444":"#9ca3af"}}>{DAYS[i]}</div>
+                  <div style={{width:28,height:28,borderRadius:"50%",background:isToday?"#f59e0b":"transparent",display:"flex",alignItems:"center",justifyContent:"center",margin:"2px auto",fontSize:13,fontWeight:800,color:isToday?"#fff":"#1a1a1a"}}>{date.getDate()}</div>
+                  <div style={{display:"flex",flexWrap:"wrap",gap:2,justifyContent:"center",minHeight:14}}>
+                    {draftCnt>0&&<span style={{fontSize:8,background:"#f3f4f6",color:"#6b7280",borderRadius:4,padding:"0 3px",fontWeight:700}}>下{draftCnt}</span>}
+                    {reservedCnt>0&&<span style={{fontSize:8,background:"#ede9fe",color:"#7c3aed",borderRadius:4,padding:"0 3px",fontWeight:700}}>予{reservedCnt}</span>}
+                    {publishedCnt>0&&<span style={{fontSize:8,background:"#d1fae5",color:"#059669",borderRadius:4,padding:"0 3px",fontWeight:700}}>済{publishedCnt}</span>}
+                    {ghostCnt>0&&<span style={{fontSize:8,background:"#fef3c7",color:"#d97706",borderRadius:4,padding:"0 3px",fontWeight:700}}>枠{ghostCnt}</span>}
+                  </div>
+                </div>
+              );
+            })}
+            {HOURS.map(hour=>(
+              <React.Fragment key={hour}>
+                <div style={{borderTop:"1px solid #ede8e0",padding:"3px 5px 0",fontSize:10,color:"#c8bfb4",textAlign:"right",background:"#faf7f3",borderRight:"1px solid #e8e0d6"}}>{hour}:00</div>
+                {weekDates.map((date,di)=>{
+                  const dateStr=weekDateStrs[di];
+                  const key=dateStr+"_"+String(hour).padStart(2,"0");
+                  const sp=postsBySlot[key]||[];
+                  const isEmpty=sp.length===0;
+                  return(
+                    <div key={hour+"-"+di}
+                      onClick={isEmpty?()=>openNew(`${dateStr}T${String(hour).padStart(2,"0")}:00`):undefined}
+                      onDragOver={dragId?e=>{e.preventDefault();setDragOver(key);}:undefined}
+                      onDragLeave={dragId?()=>setDragOver(null):undefined}
+                      onDrop={dragId?e=>{e.preventDefault();handleDrop(dragId,dateStr,hour);}:undefined}
+                      style={{borderTop:"1px solid #ede8e0",borderRight:"1px solid #e8e0d6",padding:"3px",minHeight:42,
+                        background:dragOver===key?"#fef9e7":dragId?"#fffdf5":dateStr===today?"#fffcf5":"#fff",
+                        cursor:dragId?"copy":isEmpty?"pointer":"default",transition:"background .1s",
+                        outline:dragOver===key?"2px dashed #f59e0b":"none",outlineOffset:-2}}
+                      onMouseEnter={!dragId&&isEmpty?e=>{e.currentTarget.style.background=dateStr===today?"#fff8e8":"#faf7f3";}:undefined}
+                      onMouseLeave={!dragId&&isEmpty?e=>{e.currentTarget.style.background=dateStr===today?"#fffcf5":"#fff";}:undefined}>
+                      {/* 実投稿 */}
+                      {sp.map(p=>{
+                        const pt2=POST_TYPE[p.postType||"x_post"],st2=STATUS[p.status];
+                        return(
+                          <div key={p.id}
+                            draggable
+                            onDragStart={e=>{e.stopPropagation();setDragId(p.id);e.dataTransfer.effectAllowed="move";}}
+                            onDragEnd={()=>{setDragId(null);setDragOver(null);}}
+                            onClick={e=>{e.stopPropagation();setPreview(p);}}
+                            style={{background:"#fff",border:`1.5px solid ${pt2.border}`,borderLeft:`3px solid ${pt2.dot}`,borderRadius:6,padding:"3px 5px",marginBottom:2,cursor:"grab",transition:"all .1s",opacity:dragId===p.id?0.5:1}}
+                            onMouseEnter={e=>{e.currentTarget.style.boxShadow="0 2px 8px #0000001a";e.currentTarget.style.borderColor=pt2.color;}}
+                            onMouseLeave={e=>{e.currentTarget.style.boxShadow="none";e.currentTarget.style.borderColor=pt2.border;}}>
+                            <div style={{display:"flex",alignItems:"center",gap:3,marginBottom:1}}>
+                              <span style={{width:5,height:5,borderRadius:"50%",background:pt2.dot,flexShrink:0}}/>
+                              <span style={{fontSize:9,color:"#888"}}>{fmtTime(p.datetime)}</span>
+                            </div>
+                            <div style={{fontSize:10,fontWeight:700,color:"#0f1419",lineHeight:1.3}}>{(p.title||"（タイトルなし）").slice(0,12)}{(p.title||"").length>12?"…":""}</div>
+                            <div style={{display:"flex",gap:3,marginTop:1,flexWrap:"wrap"}}>
+                              <span style={{fontSize:8,color:pt2.color,fontWeight:700,background:pt2.bg,padding:"0 4px",borderRadius:6}}>{pt2.label}</span>
+                              {st2&&<span style={{fontSize:8,color:st2.text,background:st2.chip,border:`1px solid ${st2.border}`,padding:"0 4px",borderRadius:6,fontWeight:600}}>{st2.label}</span>}
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {/* ゴースト枠（実投稿で埋まっていないもののみ表示） */}
+                      {(()=>{
+                        const filledTypes=new Set(sp.map(p=>p.postType||"x_post"));
+                        const ghosts=(ghostBySlot[key]||[]).filter(g=>!filledTypes.has(g.postType||"x_post"));
+                        if(ghosts.length===0)return null;
+                        const multi=ghosts.length>1;
+                        return multi?(
+                          <div style={{display:"flex",gap:2,flexWrap:"wrap"}}>
+                            {ghosts.map((g,gi)=>{
+                              const gpt=POST_TYPE[g.postType||"x_post"];
+                              return(
+                                <div key={"g"+gi}
+                                  onClick={e=>{e.stopPropagation();openNew(`${dateStr}T${String(g.hour).padStart(2,"0")}:00`,{title:g.title||"",postType:g.postType||"x_post"});}}
+                                  style={{flex:"1 1 0",minWidth:0,border:`1.5px dashed ${gpt.dot}`,borderLeft:`3px dashed ${gpt.dot}`,borderRadius:5,padding:"3px 4px",cursor:"pointer",opacity:0.7,transition:"all .15s",background:gpt.bg}}
+                                  onMouseEnter={e=>{e.currentTarget.style.opacity="1";e.currentTarget.style.boxShadow="0 1px 6px #0000001a";}}
+                                  onMouseLeave={e=>{e.currentTarget.style.opacity="0.7";e.currentTarget.style.boxShadow="none";}}>
+                                  <div style={{display:"flex",alignItems:"center",gap:2,marginBottom:1}}>
+                                    <span style={{width:4,height:4,borderRadius:"50%",background:gpt.dot,flexShrink:0}}/>
+                                    <span style={{fontSize:8,color:gpt.color,fontWeight:700,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{gpt.label}</span>
+                                  </div>
+                                  <div style={{fontSize:8,color:"#666",fontWeight:600,lineHeight:1.2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                                    {g.title||"予約枠"}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ):(
+                          ghosts.map((g,gi)=>{
+                            const gpt=POST_TYPE[g.postType||"x_post"];
+                            return(
+                              <div key={"g"+gi}
+                                onClick={e=>{e.stopPropagation();openNew(`${dateStr}T${String(g.hour).padStart(2,"0")}:00`,{title:g.title||"",postType:g.postType||"x_post"});}}
+                                style={{border:`1.5px dashed ${gpt.dot}`,borderLeft:`3px dashed ${gpt.dot}`,borderRadius:6,padding:"4px 6px",marginBottom:2,cursor:"pointer",opacity:0.65,transition:"all .15s",background:gpt.bg}}
+                                onMouseEnter={e=>{e.currentTarget.style.opacity="1";e.currentTarget.style.boxShadow="0 1px 6px #0000001a";}}
+                                onMouseLeave={e=>{e.currentTarget.style.opacity="0.65";e.currentTarget.style.boxShadow="none";}}>
+                                <div style={{display:"flex",alignItems:"center",gap:3}}>
+                                  <span style={{width:4,height:4,borderRadius:"50%",background:gpt.dot,flexShrink:0}}/>
+                                  <span style={{fontSize:9,color:gpt.color,fontWeight:700}}>{String(g.hour).padStart(2,"0")}:00</span>
+                                </div>
+                                {g.title
+                                  ?<div style={{fontSize:9,fontWeight:700,color:"#666",lineHeight:1.3,marginTop:1}}>{g.title.slice(0,12)}{g.title.length>12?"…":""}</div>
+                                  :<div style={{fontSize:9,color:"#999",lineHeight:1.3}}>予約枠</div>
+                                }
+                                <span style={{fontSize:8,color:gpt.color,fontWeight:700,background:"#fff",border:`1px solid ${gpt.border}`,padding:"0 4px",borderRadius:6,marginTop:2,display:"inline-block"}}>{gpt.label}</span>
+                              </div>
+                            );
+                          })
+                        );
+                      })()}
+                    </div>
+                  );
+                })}
+              </React.Fragment>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── マンスリービュー ── */}
+      {view==="month"&&(
+        <MonthView
+          posts={filtered}
+          today={today}
+          slots={slots}
+          openNew={openNew}
+          setPreview={setPreview}
+        />
+      )}
+
+      {/* ── リストビュー ── */}
+      {view==="list"&&(
+        <ListView
+          filtered={filtered}
+          today={today}
+          activeAcc={activeAcc}
+          filterStatus={filterStatus}
+          setFilter={setFilter}
+          setPreview={setPreview}
+          setEditing={setEditing}
+          handleDuplicate={handleDuplicate}
+          setRepostTgt={setRepostTgt}
+          openNew={openNew}
+          slots={slots}
+        />
+      )}
+
+      {/* ── 予約枠設定モーダル ── */}
+      {showSlotSettings&&isAdmin&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:800,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}
+          onClick={e=>{if(e.target===e.currentTarget)setShowSlotSettings(false);}}>
+          <div style={{background:"#fff",borderRadius:16,width:"100%",maxWidth:480,maxHeight:"92vh",overflow:"hidden",display:"flex",flexDirection:"column",boxShadow:"0 20px 60px #00000030"}}>
+            <div style={{padding:"14px 18px",borderBottom:"1px solid #e8e0d6",display:"flex",alignItems:"center",justifyContent:"space-between",background:"#faf7f3"}}>
+              <div>
+                <div style={{fontWeight:800,fontSize:14}}>📅 予約枠設定</div>
+                <div style={{fontSize:11,color:"#aaa",marginTop:2}}>カレンダーにゴーストカードで表示されます</div>
+              </div>
+              <Btn onClick={()=>setShowSlotSettings(false)}>閉じる</Btn>
+            </div>
+            {/* フォーム（固定） */}
+            <div style={{padding:"14px 18px",borderBottom:"1px solid #e8e0d6"}}>
+              <SlotAddForm onAdd={s=>{
+                saveSlots([...slots,{...s,id:genId()}]);
+              }}/>
+            </div>
+            {/* 枠一覧（スクロール可能） */}
+            <div style={{flex:1,minHeight:0,overflowY:"auto",padding:"12px 18px 24px"}}>
+              {slots.length===0
+                ?<div style={{textAlign:"center",color:"#ccc",fontSize:13,padding:"20px 0"}}>枠がまだありません</div>
+                :slots.map((s,i)=>{
+                  const pt=POST_TYPE[s.postType||"x_post"];
+                  return(
+                    <div key={s.id} style={{display:"flex",alignItems:"center",gap:8,background:"#f7f9f9",border:"1.5px solid #e8e0d6",borderRadius:9,padding:"7px 10px",marginBottom:6}}>
+                      <span style={{width:7,height:7,borderRadius:"50%",background:pt.dot,flexShrink:0}}/>
+                      <span style={{fontSize:11,fontWeight:700,color:"#555",whiteSpace:"nowrap",flexShrink:0}}>{slotLabel(s)}</span>
+                      <input
+                        value={s.title||""}
+                        onChange={e=>{const v=e.target.value;saveSlots(prev=>prev.map((x,j)=>j===i?{...x,title:v}:x));}}
+                        placeholder="仮タイトル"
+                        style={{flex:1,minWidth:0,border:"none",borderBottom:"1.5px solid #e0d8ce",borderRadius:0,padding:"2px 4px",fontSize:11,fontFamily:"inherit",color:"#1a1a1a",outline:"none",background:"transparent"}}
+                        onFocus={e=>e.target.style.borderBottomColor="#f59e0b"}
+                        onBlur={e=>e.target.style.borderBottomColor="#e0d8ce"}
+                      />
+                      <span style={{fontSize:10,color:pt.color,background:pt.bg,border:`1px solid ${pt.border}`,padding:"1px 7px",borderRadius:10,fontWeight:700,flexShrink:0}}>{pt.label}</span>
+                      <button onClick={()=>saveSlots(slots.filter((_,j)=>j!==i))}
+                        style={{border:"none",background:"none",color:"#fca5a5",cursor:"pointer",fontSize:13,fontWeight:700,flexShrink:0,padding:0}}>×</button>
+                    </div>
+                  );
+                })
+              }
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── 通知設定モーダル ── */}
+      {showNotifySettings&&isAdmin&&notifySettings&&(
+        <NotifySettingsModal
+          settings={notifySettings}
+          accountName={activeAcc?.name||""}
+          onSave={saveNotifySettings}
+          onClose={()=>setShowNotifySettings(false)}
+          onTestSend={handleTestSend}
+        />
+      )}
+
+      {/* ── モーダル群 ── */}
+      {preview&&<PreviewOverlay post={preview} onClose={()=>setPreview(null)}
+        onEdit={p=>{setPreview(null);setEditing({...p});}}
+        onRepost={p=>{setPreview(null);setRepostTgt(p);}}
+        onDuplicate={handleDuplicate}
+        onDelete={p=>setDeleteConfirm(p)}
+        onSaveComment={saveComment}
+        onChangeStatus={changeStatus}/>}
+
+      {editing&&<EditorModal post={{postType:'x_post',body:'',memo:'',memoLinks:[],comments:[],history:[],...editing}} onSave={save} onClose={()=>setEditing(null)}/>}
+
+      {showSearch&&<SearchModal posts={posts} onClose={()=>setShowSearch(false)}
+        onSelect={p=>{setShowSearch(false);setPreview(p);}}
+        onRepost={p=>{setShowSearch(false);setRepostTgt(p);}}/>}
+
+      {repostTgt&&<RepostModal post={repostTgt} onClose={()=>setRepostTgt(null)}
+        onRepost={(dt,r)=>handleRepost(repostTgt,dt,r)}/>}
+
+      {showAccountSettings&&isAdmin&&(
+        <AccountSettings accounts={accounts} onUpdate={updateAccount} onDelete={deleteAccount} onAdd={addAccount} onCopyLink={copyShareLink} onClose={()=>setShowAccountSettings(false)}/>
+      )}
+
+      {/* 削除確認ダイアログ */}
+      {deleteConfirm&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:900,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+          <div style={{background:"#fff",borderRadius:16,width:"100%",maxWidth:360,padding:28,boxShadow:"0 20px 60px #00000030",textAlign:"center"}}>
+            <div style={{fontSize:32,marginBottom:12}}>🗑️</div>
+            <div style={{fontWeight:800,fontSize:"1.05em",color:"#0f1419",marginBottom:8}}>この投稿を削除しますか？</div>
+            <div style={{fontSize:"0.84em",color:"#536471",marginBottom:6,lineHeight:1.5}}>「{deleteConfirm.title||"（タイトルなし）"}」</div>
+            <div style={{fontSize:"0.76em",color:"#ef4444",marginBottom:22}}>この操作は取り消せません。</div>
+            <div style={{display:"flex",gap:10}}>
+              <button onClick={()=>setDeleteConfirm(null)} style={{flex:1,border:"1.5px solid #e0d8ce",background:"#fff",borderRadius:20,padding:"10px 0",fontWeight:600,fontSize:"0.88em",color:"#536471",cursor:"pointer",fontFamily:"inherit"}}>キャンセル</button>
+              <button onClick={()=>del(deleteConfirm.id)} style={{flex:1,background:"#ef4444",border:"none",borderRadius:20,padding:"10px 0",fontWeight:800,fontSize:"0.88em",color:"#fff",cursor:"pointer",fontFamily:"inherit"}}>削除する</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {toast&&(
+        <div style={{position:"fixed",bottom:22,left:"50%",transform:"translateX(-50%)",background:"#1a1a1a",color:"#fff",padding:"9px 20px",borderRadius:24,fontSize:13,fontWeight:600,zIndex:999,boxShadow:"0 4px 16px #00000033",whiteSpace:"nowrap"}}>
+          {toast}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── リストビュー ──
+// ════════════════════════════════════════════════════════
+// マンスリービュー
+// ════════════════════════════════════════════════════════
+function MonthView({posts,today,slots,openNew,setPreview}){
+  const [monthBase,setMonthBase]=useState(()=>new Date());
+  const year=monthBase.getFullYear(),month=monthBase.getMonth();
+  const firstDay=new Date(year,month,1);
+  const lastDay=new Date(year,month+1,0);
+  // 月曜始まりで週グリッドを構築
+  const startDow=(firstDay.getDay()+6)%7; // 0=月
+  const cells=[];
+  for(let i=0;i<startDow;i++)cells.push(null);
+  for(let d=1;d<=lastDay.getDate();d++)cells.push(new Date(year,month,d));
+  while(cells.length%7!==0)cells.push(null);
+  const weeks=[];
+  for(let i=0;i<cells.length;i+=7)weeks.push(cells.slice(i,i+7));
+
+  const postsByDate=React.useMemo(()=>{
+    const m={};
+    posts.forEach(p=>{const d=p.datetime.slice(0,10);(m[d]=m[d]||[]).push(p);});
+    return m;
+  },[posts]);
+
+  const fmtD=d=>d?`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`:"";
+
+  return(
+    <div style={{height:"calc(100vh - 100px)",display:"flex",flexDirection:"column",overflow:"hidden"}}>
+      {/* ナビ */}
+      <div style={{background:"#fff",borderBottom:"1px solid #e8e0d6",padding:"6px 18px",display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
+        <button onClick={()=>setMonthBase(new Date(year,month-1,1))} style={{border:"1.5px solid #e0d8ce",background:"#fff",borderRadius:8,padding:"4px 10px",cursor:"pointer",fontSize:13,fontFamily:"inherit"}}>‹</button>
+        <span style={{fontWeight:800,fontSize:14,color:"#444",minWidth:100,textAlign:"center"}}>{year}年{month+1}月</span>
+        <button onClick={()=>setMonthBase(new Date(year,month+1,1))} style={{border:"1.5px solid #e0d8ce",background:"#fff",borderRadius:8,padding:"4px 10px",cursor:"pointer",fontSize:13,fontFamily:"inherit"}}>›</button>
+        <button onClick={()=>setMonthBase(new Date())} style={{border:"1.5px solid #e0d8ce",background:"#fff",borderRadius:8,padding:"4px 10px",cursor:"pointer",fontSize:11,fontFamily:"inherit"}}>今月</button>
+      </div>
+      {/* グリッド */}
+      <div style={{flex:1,overflow:"auto"}}>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",minWidth:700}}>
+          {["月","火","水","木","金","土","日"].map((d,i)=>(
+            <div key={d} style={{padding:"6px 0",textAlign:"center",fontSize:11,fontWeight:700,color:i>=5?"#ef4444":"#9ca3af",background:"#fff",borderBottom:"2px solid #e8e0d6",borderRight:"1px solid #e8e0d6",position:"sticky",top:0,zIndex:10}}>{d}</div>
+          ))}
+          {weeks.map((week,wi)=>week.map((date,di)=>{
+            const dateStr=fmtD(date);
+            const isToday=dateStr===today;
+            const isCurrentMonth=date&&date.getMonth()===month;
+            const dayPosts=date?(postsByDate[dateStr]||[]):[];
+            const daySlots=date?slots.filter(s=>slotMatchesDate(s,date)):[];
+            const draftCnt=dayPosts.filter(p=>p.status==="draft").length;
+            const reservedCnt=dayPosts.filter(p=>["reserved","waiting"].includes(p.status)).length;
+            const publishedCnt=dayPosts.filter(p=>["published","popular"].includes(p.status)).length;
+            return(
+              <div key={`${wi}-${di}`}
+                style={{minHeight:100,borderRight:"1px solid #e8e0d6",borderBottom:"1px solid #e8e0d6",padding:"4px 5px",background:isToday?"#fffcf5":!isCurrentMonth?"#faf7f3":"#fff",verticalAlign:"top",cursor:date?"pointer":"default"}}
+                onClick={date?()=>openNew(`${dateStr}T09:00`):undefined}>
+                {date&&(
+                  <>
+                    {/* 日付 */}
+                    <div style={{display:"flex",alignItems:"center",gap:4,marginBottom:3}}>
+                      <span style={{width:22,height:22,borderRadius:"50%",background:isToday?"#f59e0b":"transparent",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:800,color:isToday?"#fff":!isCurrentMonth?"#ccc":di>=5?"#ef4444":"#1a1a1a",flexShrink:0}}>{date.getDate()}</span>
+                      <div style={{display:"flex",gap:2,flexWrap:"wrap"}}>
+                        {draftCnt>0&&<span style={{fontSize:8,background:"#f3f4f6",color:"#6b7280",borderRadius:4,padding:"0 3px",fontWeight:700}}>下{draftCnt}</span>}
+                        {reservedCnt>0&&<span style={{fontSize:8,background:"#ede9fe",color:"#7c3aed",borderRadius:4,padding:"0 3px",fontWeight:700}}>予{reservedCnt}</span>}
+                        {publishedCnt>0&&<span style={{fontSize:8,background:"#d1fae5",color:"#059669",borderRadius:4,padding:"0 3px",fontWeight:700}}>済{publishedCnt}</span>}
+                        {daySlots.length>0&&<span style={{fontSize:8,background:"#fef3c7",color:"#d97706",borderRadius:4,padding:"0 3px",fontWeight:700}}>枠{daySlots.length}</span>}
+                      </div>
+                    </div>
+                    {/* 投稿チップ（最大3件） */}
+                    {dayPosts.slice(0,3).map(p=>{
+                      const pt=POST_TYPE[p.postType||"x_post"];
+                      return(
+                        <div key={p.id} onClick={e=>{e.stopPropagation();setPreview(p);}}
+                          style={{display:"flex",alignItems:"center",gap:3,background:pt.bg,border:`1px solid ${pt.border}`,borderLeft:`3px solid ${pt.dot}`,borderRadius:4,padding:"2px 5px",marginBottom:2,cursor:"pointer",overflow:"hidden"}}
+                          onMouseEnter={e=>e.currentTarget.style.opacity="0.8"}
+                          onMouseLeave={e=>e.currentTarget.style.opacity="1"}>
+                          <span style={{fontSize:8,color:pt.color,fontWeight:700,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p.title||"（無題）"}</span>
+                        </div>
+                      );
+                    })}
+                    {dayPosts.length>3&&<div style={{fontSize:8,color:"#aaa",textAlign:"right"}}>+{dayPosts.length-3}件</div>}
+                    {/* 予約枠チップ */}
+                    {daySlots.slice(0,2).map((s,si)=>{
+                      const gpt=POST_TYPE[s.postType||"x_post"];
+                      return(
+                        <div key={"s"+si} onClick={e=>{e.stopPropagation();openNew(`${dateStr}T${String(s.hour).padStart(2,"0")}:00`,{title:s.title||"",postType:s.postType||"x_post"});}}
+                          style={{display:"flex",alignItems:"center",gap:3,border:`1px dashed ${gpt.dot}`,borderLeft:`2px dashed ${gpt.dot}`,borderRadius:4,padding:"2px 5px",marginBottom:2,cursor:"pointer",background:gpt.bg,opacity:0.7}}
+                          onMouseEnter={e=>e.currentTarget.style.opacity="1"}
+                          onMouseLeave={e=>e.currentTarget.style.opacity="0.7"}>
+                          <span style={{fontSize:8,color:gpt.color,fontWeight:700,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.title||`${String(s.hour).padStart(2,"0")}:00 予約枠`}</span>
+                        </div>
+                      );
+                    })}
+                    {daySlots.length>2&&<div style={{fontSize:8,color:"#d97706",textAlign:"right"}}>+{daySlots.length-2}枠</div>}
+                  </>
+                )}
+              </div>
+            );
+          }))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ListView({filtered,today,activeAcc,filterStatus,setFilter,setPreview,setEditing,handleDuplicate,setRepostTgt,openNew,slots}){
+  const [showSlots,setShowSlots]=useState(true);
+  const byDate=React.useMemo(()=>{
+    const m={};
+    filtered.forEach(p=>{
+      const d=p.datetime.slice(0,10);
+      (m[d]=m[d]||[]).push(p);
+    });
+    return m;
+  },[filtered]);
+
+  // 予約枠がある日付もカラムに含める
+  const dates=React.useMemo(()=>{
+    const dateSet=new Set(Object.keys(byDate));
+    if(showSlots&&slots?.length>0){
+      // 今日から60日分の日付を生成してスロット該当日を追加
+      for(let i=0;i<60;i++){
+        const d=new Date();d.setDate(d.getDate()+i);
+        const ds=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+        if(slots.some(s=>slotMatchesDate(s,d)))dateSet.add(ds);
+      }
+    }
+    return [...dateSet].sort();
+  },[byDate,slots,showSlots]);
+
+  const scrollRef=useRef(null);
+  const todayColRef=useRef(null);
+  useEffect(()=>{
+    if(!scrollRef.current||!todayColRef.current)return;
+    const container=scrollRef.current;
+    const col=todayColRef.current;
+    container.scrollTo({left:Math.max(0,col.offsetLeft-18),behavior:"smooth"});
+  },[today,dates.join(",")]);
+
+  return(
+    <div style={{display:"flex",flexDirection:"column",height:"calc(100vh - 52px)",overflow:"hidden"}}>
+      <div style={{display:"flex",alignItems:"center",gap:8,padding:"10px 18px",borderBottom:"1px solid #e8e0d6",background:"#fff",flexShrink:0}}>
+        {activeAcc&&<span style={{width:8,height:8,borderRadius:"50%",background:activeAcc.color,display:"inline-block"}}/>}
+        <span style={{fontWeight:800,fontSize:14}}>{activeAcc?.name} の投稿</span>
+        <span style={{fontSize:12,color:"#aaa"}}>{filtered.length}件</span>
+        {/* 予約枠トグル */}
+        <button onClick={()=>setShowSlots(v=>!v)}
+          style={{display:"flex",alignItems:"center",gap:5,border:`1.5px solid ${showSlots?"#f59e0b":"#e0d8ce"}`,borderRadius:20,padding:"4px 10px",fontSize:11,fontWeight:700,cursor:"pointer",background:showSlots?"#fef3c7":"#fff",color:showSlots?"#d97706":"#aaa",fontFamily:"inherit",transition:"all .15s"}}>
+          <span style={{fontSize:13}}>📅</span>
+          予約枠{showSlots?"表示中":"非表示"}
+        </button>
+        <select value={filterStatus} onChange={e=>setFilter(e.target.value)}
+          style={{marginLeft:"auto",background:"#f8f4ef",border:"1.5px solid #e0d8ce",borderRadius:7,padding:"5px 9px",fontSize:12,color:"#666",outline:"none",cursor:"pointer"}}>
+          <option value="all">すべてのステータス</option>
+          {Object.entries(STATUS).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
+        </select>
+      </div>
+      <div ref={scrollRef} style={{flex:1,overflowX:"auto",overflowY:"hidden",display:"flex",padding:"16px 18px",gap:14,alignItems:"flex-start"}}>
+        {dates.length===0&&<div style={{color:"#ccc",fontSize:13,margin:"auto"}}>投稿がありません</div>}
+        {dates.map(date=>{
+          const isToday=date===today;
+          const dayPosts=(byDate[date]||[]).sort((a,b)=>a.datetime.localeCompare(b.datetime));
+          const d=new Date(date+"T00:00:00");
+          const dayLabel=["日","月","火","水","木","金","土"][d.getDay()];
+          // この日に該当する予約枠を時刻順で取得
+          const daySlots=showSlots&&slots?.length>0
+            ?slots.filter(s=>slotMatchesDate(s,d)).sort((a,b)=>a.hour-b.hour)
+            :[];
+          // 予約枠のうち実投稿が埋まっていない枠だけゴースト表示
+          const filledHours=new Set(dayPosts.map(p=>parseInt(p.datetime.slice(11,13))));
+          const ghostSlots=daySlots.filter(s=>!filledHours.has(s.hour));
+          // 実投稿とゴーストをまとめて時刻順に並べる
+          const allItems=[
+            ...dayPosts.map(p=>({type:"post",data:p,sortKey:p.datetime.slice(11,13)})),
+            ...ghostSlots.map(s=>({type:"ghost",data:s,sortKey:String(s.hour).padStart(2,"0")})),
+          ].sort((a,b)=>a.sortKey.localeCompare(b.sortKey));
+
+          return(
+            <div key={date} ref={isToday?todayColRef:null} style={{flexShrink:0,width:200}}>
+              <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:8,paddingBottom:7,borderBottom:`2px solid ${isToday?"#f59e0b":"#e8e0d6"}`}}>
+                <div style={{width:30,height:30,borderRadius:"50%",background:isToday?"#f59e0b":"#f2ede6",display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:800,color:isToday?"#fff":"#555",flexShrink:0}}>
+                  {d.getDate()}
+                </div>
+                <div>
+                  <div style={{fontSize:10,fontWeight:700,color:isToday?"#f59e0b":"#aaa"}}>{dayLabel}曜日</div>
+                  <div style={{fontSize:10,color:"#bbb"}}>{d.getMonth()+1}月</div>
+                </div>
+                <span style={{marginLeft:"auto",fontSize:10,color:"#ccc"}}>{dayPosts.length}件</span>
+              </div>
+              <div style={{display:"flex",flexDirection:"column",gap:7}}>
+                {allItems.map((item,idx)=>{
+                  if(item.type==="post"){
+                    const p=item.data;
+                    const pt2=POST_TYPE[p.postType||"x_post"];
+                    const st2=STATUS[p.status];
+                    return(
+                      <div key={p.id} onClick={()=>setPreview(p)}
+                        style={{background:"#fff",border:`1.5px solid ${pt2.border}`,borderLeft:`3px solid ${pt2.dot}`,borderRadius:9,padding:"9px 10px",cursor:"pointer",transition:"box-shadow .15s"}}
+                        onMouseEnter={e=>e.currentTarget.style.boxShadow="0 3px 12px #0000001a"}
+                        onMouseLeave={e=>e.currentTarget.style.boxShadow="none"}>
+                        <div style={{display:"flex",alignItems:"center",gap:4,marginBottom:4}}>
+                          <span style={{fontSize:10,color:"#888"}}>{p.datetime.slice(11,16)}</span>
+                          <span style={{fontSize:9,color:pt2.color,fontWeight:700,background:pt2.bg,border:`1px solid ${pt2.border}`,padding:"0 5px",borderRadius:6,marginLeft:2}}>{pt2.label}</span>
+                          {st2&&<span style={{fontSize:9,color:st2.text,background:st2.chip,border:`1px solid ${st2.border}`,padding:"0 5px",borderRadius:6,fontWeight:600,marginLeft:"auto"}}>{st2.label}</span>}
+                        </div>
+                        <div style={{fontSize:12,fontWeight:800,color:"#0f1419",lineHeight:1.35,marginBottom:4}}>{(p.title||"（タイトルなし）").slice(0,22)}{(p.title||"").length>22?"…":""}</div>
+                        {p.memo&&<div style={{fontSize:10,color:"#b45309",background:"#fffbeb",borderRadius:4,padding:"2px 6px",marginBottom:5,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.memo}</div>}
+                        <div style={{display:"flex",gap:4,marginTop:4}}>
+                          <button onClick={e=>{e.stopPropagation();setEditing({...p});}}
+                            style={{background:"#f59e0b",border:"none",borderRadius:5,padding:"3px 8px",fontSize:9,fontWeight:700,color:"#fff",cursor:"pointer",fontFamily:"inherit"}}>編集</button>
+                          <button onClick={e=>{e.stopPropagation();handleDuplicate(p);}}
+                            style={{background:"none",border:"1.5px solid #e0d8ce",borderRadius:5,padding:"3px 6px",fontSize:9,color:"#536471",cursor:"pointer",fontFamily:"inherit"}}
+                            onMouseEnter={e=>e.currentTarget.style.background="#f3f4f6"} onMouseLeave={e=>e.currentTarget.style.background="none"}>📋</button>
+                          <button onClick={e=>{e.stopPropagation();setRepostTgt(p);}}
+                            style={{background:"none",border:"1.5px solid #e0d8ce",borderRadius:5,padding:"3px 6px",fontSize:9,color:"#536471",cursor:"pointer",fontFamily:"inherit"}}
+                            onMouseEnter={e=>{e.currentTarget.style.background="#f59e0b";e.currentTarget.style.color="#fff";e.currentTarget.style.borderColor="#f59e0b";}} onMouseLeave={e=>{e.currentTarget.style.background="none";e.currentTarget.style.color="#536471";e.currentTarget.style.borderColor="#e0d8ce";}}>🔁</button>
+                        </div>
+                      </div>
+                    );
+                  }
+                  // ゴースト枠
+                  const s=item.data;
+                  const gpt=POST_TYPE[s.postType||"x_post"];
+                  return(
+                    <div key={"g"+idx}
+                      onClick={()=>openNew(`${date}T${String(s.hour).padStart(2,"0")}:00`,{title:s.title||"",postType:s.postType||"x_post"})}
+                      style={{border:`1.5px dashed ${gpt.dot}`,borderLeft:`3px dashed ${gpt.dot}`,borderRadius:9,padding:"8px 10px",cursor:"pointer",opacity:0.7,transition:"all .15s",background:gpt.bg}}
+                      onMouseEnter={e=>{e.currentTarget.style.opacity="1";e.currentTarget.style.boxShadow="0 2px 8px #0000001a";}}
+                      onMouseLeave={e=>{e.currentTarget.style.opacity="0.7";e.currentTarget.style.boxShadow="none";}}>
+                      <div style={{display:"flex",alignItems:"center",gap:5,marginBottom:3}}>
+                        <span style={{width:5,height:5,borderRadius:"50%",background:gpt.dot,flexShrink:0}}/>
+                        <span style={{fontSize:10,color:gpt.color,fontWeight:700}}>{String(s.hour).padStart(2,"0")}:00</span>
+                        <span style={{fontSize:9,color:gpt.color,background:"#fff",border:`1px solid ${gpt.border}`,padding:"0 5px",borderRadius:6,fontWeight:700,marginLeft:"auto"}}>{gpt.label}</span>
+                      </div>
+                      {s.title
+                        ?<div style={{fontSize:11,fontWeight:700,color:"#555",lineHeight:1.35,marginBottom:2}}>{s.title.slice(0,20)}{s.title.length>20?"…":""}</div>
+                        :<div style={{fontSize:10,color:"#999",fontWeight:600}}>予約枠 — クリックで作成</div>
+                      }
+                    </div>
+                  );
+                })}
+                <button onClick={()=>openNew(`${date}T09:00`)}
+                  style={{width:"100%",border:"1.5px dashed #e0d8ce",background:"transparent",borderRadius:9,padding:"8px 0",fontSize:10,color:"#ccc",cursor:"pointer",fontFamily:"inherit",transition:"all .15s"}}
+                  onMouseEnter={e=>{e.currentTarget.style.borderColor="#f59e0b";e.currentTarget.style.color="#f59e0b";}}
+                  onMouseLeave={e=>{e.currentTarget.style.borderColor="#e0d8ce";e.currentTarget.style.color="#ccc";}}>
+                  ＋ 追加
+                </button>
+              </div>
+            </div>
+          );
+        })}
+        <div style={{flexShrink:0,width:200}}>
+          <button onClick={()=>openNew()}
+            style={{width:"100%",border:"2px dashed #e0d8ce",background:"transparent",borderRadius:9,padding:"14px 0",fontSize:11,color:"#ccc",cursor:"pointer",fontFamily:"inherit",transition:"all .15s"}}
+            onMouseEnter={e=>{e.currentTarget.style.borderColor="#f59e0b";e.currentTarget.style.color="#f59e0b";}}
+            onMouseLeave={e=>{e.currentTarget.style.borderColor="#e0d8ce";e.currentTarget.style.color="#ccc";}}>
+            ＋ 新規作成
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── 予約枠：スロットのラベル生成ヘルパー ──
+// type: "weekly"=毎週特定曜日, "daily"=毎日, "nth_weekday"=第N曜日（月次）
+function slotLabel(s){
+  const DOWL=["","月","火","水","木","金","土","日"];
+  const NTH=["","第1","第2","第3","第4","第5"];
+  const t=String(s.hour).padStart(2,"0")+":00";
+  if(s.type==="daily") return `毎日 ${t}`;
+  if(s.type==="nth_weekday") return `毎月${NTH[s.nth]||""}${DOWL[s.dow]||""}曜 ${t}`;
+  return `毎週${DOWL[s.dow]||""}曜 ${t}`;
+}
+
+// ── 日付がスロット条件に一致するか判定 ──
+function slotMatchesDate(s,date){
+  const dow=date.getDay()===0?7:date.getDay(); // 1=月〜7=日
+  if(s.type==="daily") return true;
+  if(s.type==="weekly") return s.dow===dow;
+  if(s.type==="nth_weekday"){
+    if(s.dow!==dow)return false;
+    // 何番目の該当曜日かを計算
+    const d=date.getDate();
+    const nth=Math.ceil(d/7);
+    return s.nth===nth;
+  }
+  // 後方互換：typeなし→weekly扱い
+  return s.dow===dow;
+}
+
+// ── 予約枠追加フォーム ──
+function SlotAddForm({onAdd}){
+  const [type,setType]=useState("weekly");
+  const [dow,setDow]=useState(1);
+  const [nth,setNth]=useState(1);
+  const [hour,setHour]=useState(9);
+  const [postType,setPostType]=useState("x_post");
+  const pt=POST_TYPE[postType];
+
+  const preview=React.useMemo(()=>{
+    const t=String(hour).padStart(2,"0")+":00";
+    if(type==="daily") return `毎日 ${t}`;
+    if(type==="nth_weekday") return `毎月第${nth}${["","月","火","水","木","金","土","日"][dow]}曜 ${t}`;
+    return `毎週${["","月","火","水","木","金","土","日"][dow]}曜 ${t}`;
+  },[type,dow,nth,hour]);
+
+  return(
+    <div style={{background:"#fffbeb",border:"1.5px dashed #fcd34d",borderRadius:10,padding:"14px 14px 12px",marginTop:8}}>
+      <div style={{fontSize:11,fontWeight:700,color:"#92400e",marginBottom:10}}>＋ 新しい予約枠</div>
+
+      {/* 繰り返しタイプ */}
+      <div style={{marginBottom:10}}>
+        <label style={{fontSize:10,color:"#888",fontWeight:700,display:"block",marginBottom:4}}>繰り返し</label>
+        <div style={{display:"flex",gap:4}}>
+          {SLOT_TYPES.map(([v,l])=>(
+            <button key={v} onClick={()=>setType(v)}
+              style={{padding:"4px 12px",borderRadius:6,border:type===v?"2px solid #f59e0b":"1.5px solid #e0d8ce",background:type===v?"#fef3c7":"#fff",fontSize:11,fontWeight:type===v?700:500,color:type===v?"#d97706":"#555",cursor:"pointer",fontFamily:"inherit"}}>
+              {l}
             </button>
           ))}
         </div>
-        {form.recurringId && <span style={{ fontSize:10, color:"#7C3AED", background:"#F5F3FF", borderRadius:5, padding:"3px 8px", fontWeight:700 }}>↻ 定期配信</span>}
-        <button className="btn-ghost" onClick={onClose} style={{ ...S.ghost, padding:"4px 8px", color:"#C0BCCE", border:"none" }}>✕</button>
       </div>
 
-      <div style={{ flex:1, overflowY:"auto", padding:"16px 18px" }}>
-        {tab === "editor" ? (
-          <>
-            <input value={form.title} onChange={e => set("title", e.target.value)} placeholder="配信タイトルを入力..."
-              style={{ width:"100%", border:"none", fontSize:17, fontWeight:800, color:"#1A1040", outline:"none", marginBottom:12, background:"transparent", fontFamily:"inherit" }} />
-            <div style={{ display:"flex", gap:8, marginBottom:14, flexWrap:"wrap", alignItems:"center" }}>
-              <StatusPill status={form.status} onChange={v => set("status", v)} />
-              <input type="date" value={form.date} onChange={e => set("date", e.target.value)}
-                style={{ border:"1px solid #D8D0F8", borderRadius:6, padding:"3px 8px", fontSize:11, color:"#1A1040", outline:"none", background:"#FAFCFF", fontFamily:"inherit" }} />
-              <input type="time" value={form.time} onChange={e => set("time", e.target.value)}
-                style={{ border:"1px solid #D8D0F8", borderRadius:6, padding:"3px 8px", fontSize:11, color:"#1A1040", outline:"none", background:"#FAFCFF", fontFamily:"inherit", width:78 }} />
-            </div>
-
-            {/* Toolbar */}
-            <div style={{ display:"flex", gap:2, padding:"5px 8px", background:"#EDE6FF", borderRadius:"8px 8px 0 0", border:"1px solid #D8D0F8", borderBottom:"none" }}>
-              {[["B","**","**"],["I","_","_"],["—","—",""],["#"," # ",""]].map(([l,b,a]) => (
-                <button key={l} className="toolbar-btn" onClick={() => insertFormat(b,a)}
-                  style={{ padding:"4px 9px", border:"none", borderRadius:5, background:"transparent", fontSize:12, fontWeight:700, cursor:"pointer", color:"#C0BCCE" }}>
+      <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}}>
+        {/* 第N（nth_weekdayのみ） */}
+        {type==="nth_weekday"&&(
+          <div>
+            <label style={{fontSize:10,color:"#888",fontWeight:700,display:"block",marginBottom:4}}>第N</label>
+            <div style={{display:"flex",gap:4}}>
+              {SLOT_NTHS.map(([v,l])=>(
+                <button key={v} onClick={()=>setNth(v)}
+                  style={{padding:"4px 8px",borderRadius:6,border:nth===v?"2px solid #f59e0b":"1.5px solid #e0d8ce",background:nth===v?"#fef3c7":"#fff",fontSize:11,fontWeight:nth===v?700:500,color:nth===v?"#d97706":"#555",cursor:"pointer",fontFamily:"inherit"}}>
                   {l}
                 </button>
               ))}
-              <div style={{ flex:1 }} />
-              <button className="toolbar-btn" onClick={() => { navigator.clipboard.writeText(form.body); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
-                style={{ padding:"4px 10px", border:"1px solid #D8D0F8", borderRadius:5, background:copied?"#DCFCE7":"#fff", fontSize:11, fontWeight:700, cursor:"pointer", color:copied?"#059669":"#7C74A8", transition:"all 0.2s" }}>
-                {copied ? "✓ コピー済" : "コピー"}
-              </button>
-              {onSaveAsTemplate && (
-                <button className="toolbar-btn" onClick={() => onSaveAsTemplate(form)}
-                  style={{ padding:"4px 10px", border:"1px solid #D8D0F8", borderRadius:5, background:"#fff", fontSize:11, fontWeight:700, cursor:"pointer", color:"#059669" }}>
-                  ＋ テンプレ保存
+            </div>
+          </div>
+        )}
+        {/* 曜日（毎日以外） */}
+        {type!=="daily"&&(
+          <div style={{flex:1,minWidth:120}}>
+            <label style={{fontSize:10,color:"#888",fontWeight:700,display:"block",marginBottom:4}}>曜日</label>
+            <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+              {SLOT_DOWS.map(([v,l])=>(
+                <button key={v} onClick={()=>setDow(v)}
+                  style={{padding:"4px 9px",borderRadius:6,border:dow===v?"2px solid #f59e0b":"1.5px solid #e0d8ce",background:dow===v?"#fef3c7":"#fff",fontSize:11,fontWeight:dow===v?700:500,color:dow===v?"#d97706":"#555",cursor:"pointer",fontFamily:"inherit"}}>
+                  {l}
                 </button>
-              )}
-              <button className="toolbar-btn" onClick={() => { setTplOpen(v => !v); setTplSearch(""); setTimeout(() => tplSearchRef.current && tplSearchRef.current.focus(), 60); }}
-                style={{ padding:"4px 10px", border:"1px solid #D8D0F8", borderRadius:5, background:tplOpen?"#EDE6FF":"#fff", fontSize:11, fontWeight:700, cursor:"pointer", color:tplOpen?"#6D4EE8":"#7C74A8" }}>
-                テンプレ挿入 {tplOpen ? "▲" : "▼"}
-              </button>
-            </div>
-            {tplOpen && (
-              <div style={{ border:"1px solid #D8D0F8", borderTop:"none", background:"#fff", borderRadius:"0 0 8px 8px" }}>
-                <div style={{ padding:"7px 10px", borderBottom:"1px solid #F0EBFF", display:"flex", alignItems:"center", gap:6 }}>
-                  <span style={{ fontSize:13, color:"#C0BCCE" }}>⌕</span>
-                  <input ref={tplSearchRef} value={tplSearch} onChange={e => setTplSearch(e.target.value)}
-                    placeholder="テンプレートを検索..."
-                    style={{ flex:1, border:"none", outline:"none", fontSize:12, color:"#1A1040", fontFamily:"inherit", background:"transparent" }} />
-                  {tplSearch && <button onClick={() => setTplSearch("")} style={{ border:"none", background:"none", color:"#C0BCCE", cursor:"pointer", fontSize:11 }}>✕</button>}
-                </div>
-                <div style={{ maxHeight:180, overflowY:"auto" }}>
-                  {filteredTpls.length === 0
-                    ? <div style={{ padding:"12px", fontSize:12, color:"#C0BCCE", textAlign:"center" }}>見つかりません</div>
-                    : filteredTpls.map(t => {
-                        const hl = highlightTitle(t.title, tplSearch);
-                        return (
-                          <div key={t.id} className="post-row" onClick={() => { set("body", t.body); setTplOpen(false); setTplSearch(""); }}
-                            style={{ padding:"9px 12px", cursor:"pointer", borderBottom:"1px solid #F8F5FF", display:"flex", alignItems:"center", gap:8 }}>
-                            <div style={{ flex:1 }}>
-                              <div style={{ fontSize:12, fontWeight:700, color:"#4B38C8" }}>
-                                {Array.isArray(hl)
-                                  ? <>{hl[0]}<mark style={{ background:"#FEF08A", borderRadius:2 }}>{hl[1]}</mark>{hl[2]}</>
-                                  : hl}
-                              </div>
-                              <div style={{ fontSize:10, color:"#C0BCCE", marginTop:1 }}>📂 {t.folder}</div>
-                            </div>
-                            <span style={{ fontSize:10, color:"#A89CC8", background:"#F0EBFF", borderRadius:4, padding:"2px 7px", fontWeight:600, flexShrink:0 }}>挿入</span>
-                          </div>
-                        );
-                      })
-                  }
-                </div>
-              </div>
-            )}
-            <textarea ref={textareaRef} value={form.body} onChange={e => set("body", e.target.value)}
-              placeholder={"配信の内容、説明文、スクリプトを書く...\n\n**太字** _斜体_ # 見出し"}
-              style={{ ...S.input, minHeight:220, resize:"vertical", borderRadius:tplOpen?"0 0 8px 8px":"0 0 8px 8px", borderTop:"none", lineHeight:1.8, marginBottom:12 }} />
-            <div style={{ marginBottom:12 }}>
-              <label style={S.label}>📝 メモ（内部用）</label>
-              <textarea value={form.note} onChange={e => set("note", e.target.value)} placeholder="備考・メモ（改行OK）"
-                style={{ ...S.input, fontSize:12, minHeight:72, resize:"vertical", lineHeight:1.7 }} />
-            </div>
-            <div>
-              <label style={S.label}>✅ 配信先チェック（タップで選択）</label>
-              <div style={{ display:"flex", flexWrap:"wrap", gap:5 }}>
-                {TARGETS.map(tg => {
-                  const entry = (form.postTargets||[]).find(x => x.targetId === tg.id);
-                  const isOn = !!entry;
-                  return (
-                    <div key={tg.id}
-                      onClick={() => {
-                        const cur = form.postTargets||[];
-                        set("postTargets", isOn ? cur.filter(x=>x.targetId!==tg.id) : [...cur,{targetId:tg.id,url:""}]);
-                      }}
-                      style={{ display:"inline-flex", alignItems:"center", gap:5, padding:"5px 10px", borderRadius:20, border:`1.5px solid ${isOn?tg.color:"#D4C8F4"}`, background:isOn?`${tg.color}15`:"#fff", cursor:"pointer", transition:"all 0.12s" }}>
-                      <div style={{ width:14, height:14, borderRadius:3, border:`2px solid ${isOn?tg.color:"#C9BCEE"}`, background:isOn?tg.color:"#fff", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
-                        {isOn && <span style={{ color:"#fff", fontSize:9, fontWeight:900, lineHeight:1 }}>✓</span>}
-                      </div>
-                      <span style={{ fontSize:11, fontWeight:700, color:isOn?tg.color:"#6B5EA8", whiteSpace:"nowrap" }}>{tg.icon} {tg.name}</span>
-                      {isOn && entry.url && <a href={entry.url} target="_blank" rel="noopener noreferrer" onClick={e=>e.stopPropagation()} style={{ fontSize:10, color:tg.color, fontWeight:700, textDecoration:"none" }}>↗</a>}
-                    </div>
-                  );
-                })}
-              </div>
-              <p style={{ margin:"6px 0 0", fontSize:10, color:"#C0BCCE" }}>URLは「設定タブ」から入力できます</p>
-            </div>
-          </>
-        ) : (
-          <>
-            <div style={{ marginBottom:16 }}>
-              <label style={S.label}>ステータス</label>
-              <StatusPill status={form.status} onChange={v => set("status", v)} />
-            </div>
-            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:16 }}>
-              <div><label style={S.label}>配信日</label><input type="date" value={form.date} onChange={e => set("date", e.target.value)} style={S.input} /></div>
-              <div><label style={S.label}>時刻</label><input type="time" value={form.time} onChange={e => set("time", e.target.value)} style={S.input} /></div>
-            </div>
-            <div style={{ marginBottom:16 }}>
-              <label style={S.label}>所要時間（分）</label>
-              <input type="number" min={5} value={form.duration} onChange={e => set("duration", +e.target.value)} style={{ ...S.input, width:90 }} />
-            </div>
-            <div style={{ marginBottom:16 }}>
-              <label style={S.label}>配信先プラットフォーム</label>
-              <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginTop:4 }}>
-                {PLATFORMS.map(pl => {
-                  const on = form.platforms.includes(pl.id);
-                  return (
-                    <div key={pl.id} onClick={() => set("platforms", on?form.platforms.filter(x=>x!==pl.id):[...form.platforms,pl.id])}
-                      style={{ padding:"5px 11px", borderRadius:6, border:`1.5px solid ${on?pl.color:"#C9BCEE"}`, background:on?`${pl.color}15`:"#fff", color:on?pl.color:"#C0BCCE", fontSize:11, fontWeight:700, cursor:"pointer", transition:"all 0.12s" }}>
-                      {pl.icon} {pl.name}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-            <div style={{ marginBottom:16 }}>
-              <label style={S.label}>タグ（カンマ区切り）</label>
-              <input value={form.tags.join(", ")} onChange={e => set("tags", e.target.value.split(",").map(t=>t.trim()).filter(Boolean))} style={S.input} placeholder="動画, 告知, コラボ" />
-            </div>
-            <div style={{ marginBottom:8 }}>
-              <label style={S.label}>配信管理対象とリンク</label>
-              <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
-                {TARGETS.map(tg => {
-                  const entry = (form.postTargets||[]).find(x => x.targetId === tg.id);
-                  const isOn = !!entry;
-                  return (
-                    <div key={tg.id} style={{ borderRadius:8, border:`1.5px solid ${isOn ? tg.color : "#D4C8F4"}`, background:isOn ? `${tg.color}08` : "#FAFCFF" }}>
-                      <div style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 10px", cursor:"pointer" }}
-                        onClick={() => {
-                          const cur = form.postTargets||[];
-                          set("postTargets", isOn ? cur.filter(x=>x.targetId!==tg.id) : [...cur,{targetId:tg.id,url:""}]);
-                        }}>
-                        <span style={{ fontSize:13, color:tg.color }}>{tg.icon}</span>
-                        <span style={{ fontSize:12, fontWeight:700, color:isOn?tg.color:"#6B5EA8", flex:1 }}>{tg.name}</span>
-                        <div style={{ width:32,height:18,borderRadius:9,background:isOn?tg.color:"#D4C8F4",display:"flex",alignItems:"center",padding:"0 2px",flexShrink:0 }}>
-                          <div style={{ width:14,height:14,borderRadius:"50%",background:"#fff",marginLeft:isOn?"auto":0,transition:"margin 0.15s" }} />
-                        </div>
-                      </div>
-                      {isOn && (
-                        <div style={{ padding:"0 10px 8px" }}>
-                          <div style={{ display:"flex",alignItems:"center",gap:6,background:"#fff",borderRadius:6,border:`1px solid ${tg.color}40`,padding:"5px 8px" }}>
-                            <span style={{ fontSize:11, color:tg.color }}>🔗</span>
-                            <input value={entry.url}
-                              onChange={e => set("postTargets", (form.postTargets||[]).map(x=>x.targetId===tg.id?{...x,url:e.target.value}:x))}
-                              placeholder={`${tg.name} の投稿URL（任意）`}
-                              onClick={ev => ev.stopPropagation()}
-                              style={{ flex:1,border:"none",outline:"none",fontSize:11,color:"#1A1040",fontFamily:"inherit",background:"transparent" }} />
-                            {entry.url && <a href={entry.url} target="_blank" rel="noopener noreferrer" style={{ fontSize:10,color:tg.color,fontWeight:700,textDecoration:"none" }}>開く↗</a>}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </>
-        )}
-      </div>
-
-      <div style={{ padding:"10px 14px", borderTop:"1px solid #EDE8FF", display:"flex", flexDirection:"column", gap:6, flexShrink:0 }}>
-        <button
-          onClick={async () => { setIsSaving(true); await onSave(form); setIsSaving(false); }}
-          disabled={isSaving}
-          style={{ ...S.primary, justifyContent:"center", opacity:isSaving?0.75:1, transition:"opacity 0.2s" }}>
-          {isSaving ? "⏳ 保存中..." : "保存"}
-        </button>
-        <div style={{ display:"flex", gap:6 }}>
-          {onConvertToRecurring && (
-            <button onClick={() => onConvertToRecurring(form)}
-              style={{ ...S.ghost, fontSize:11, fontWeight:700, color:"#7C3AED", borderColor:"#C4B5FD", padding:"7px 10px", whiteSpace:"nowrap", flex:1, justifyContent:"center", display:"flex" }}>
-              ↻ 定期配信に変換
-            </button>
-          )}
-          <button className="btn-ghost" onClick={() => { if(window.confirm("削除しますか？")) onDelete(form.id); }}
-            style={{ ...S.ghost, color:"#EF4444", borderColor:"#FECACA", padding:"7px 12px" }}>削除</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// TEMPLATE VIEW
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-function TemplateView({ templates, setTemplates, showToast }) {
-  const [folder, setFolder] = useState("all");
-  const [editing, setEditing] = useState(null);
-  const [notionOpen, setNotionOpen] = useState(false);
-  const [searchQ, setSearchQ] = useState("");
-  const folders = ["all", ...new Set(templates.map(t => t.folder))];
-
-  const shown = useMemo(() => {
-    let list = folder === "all" ? templates : templates.filter(t => t.folder === folder);
-    if (searchQ.trim()) {
-      const lq = searchQ.toLowerCase();
-      list = list.filter(t => [t.title, t.body, t.folder, ...t.tags].join(" ").toLowerCase().includes(lq));
-    }
-    return list;
-  }, [templates, folder, searchQ]);
-
-  const saveTpl = async (t: any) => {
-    try {
-      const isNew = !t.id || typeof t.id === "number" && t.id > 1e12;
-      const method = isNew ? "POST" : "PUT";
-      const url    = isNew ? "/api/templates" : `/api/templates/${t.id}`;
-      const res    = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(t) });
-      if (!res.ok) throw new Error(await res.text());
-      const saved = await res.json();
-      setTemplates(ts => isNew ? [...ts, saved] : ts.map(x => x.id === t.id ? saved : x));
-      setEditing(null); showToast("テンプレートを保存しました");
-    } catch (e) { showToast("保存に失敗しました"); console.error(e); }
-  };
-  const deleteTpl = async (id: any) => {
-    try {
-      if (id && typeof id === "number" && id < 1e12) {
-        const res = await fetch(`/api/templates/${id}`, { method: "DELETE" });
-        if (!res.ok) throw new Error(await res.text());
-      }
-      setTemplates(ts => ts.filter(x => x.id !== id));
-      showToast("テンプレートを削除しました");
-    } catch (e) { showToast("削除に失敗しました"); console.error(e); }
-  };
-
-  const importFromNotion = async (item: any) => {
-    try {
-      const res = await fetch("/api/templates", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(item) });
-      if (!res.ok) throw new Error(await res.text());
-      const saved = await res.json();
-      setTemplates(ts => [...ts, saved]);
-      showToast(`「${saved.title}」を取り込みました`);
-    } catch (e) { showToast("取り込みに失敗しました"); console.error(e); }
-  };
-
-  return (
-    <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"hidden" }}>
-      <div style={{ padding:"14px 24px 12px", background:"#F8F5FF", borderBottom:"1px solid #E8E2FF", flexShrink:0 }}>
-        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
-          <h2 style={{ margin:0, fontSize:17, fontWeight:800, color:"#4B38C8" }}>テンプレート</h2>
-          <div style={{ display:"flex", gap:8 }}>
-            <button onClick={() => setNotionOpen(true)}
-              style={{ ...S.ghost, gap:7, fontSize:12, fontWeight:700, borderColor:"#C9BCEE", color:"#C0BCCE" }}>
-              <span style={{ fontSize:15 }}>𝒩</span> Notionから取り込む
-            </button>
-            <button onClick={() => setEditing({ id:Date.now(), title:"", folder:"", tags:[], body:"" })} style={S.primary}>+ 新規テンプレート</button>
-          </div>
-        </div>
-        <div style={{ display:"flex", gap:8, alignItems:"center" }}>
-          <div style={{ position:"relative" }}>
-            <span style={{ position:"absolute", left:9, top:"50%", transform:"translateY(-50%)", fontSize:13, color:"#7A9AB5" }}>⌕</span>
-            <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="テンプレートを検索..." style={{ ...S.input, paddingLeft:28, width:220, fontSize:12 }} />
-          </div>
-          <div style={{ display:"flex", gap:5, flexWrap:"wrap" }}>
-            {folders.map(f => (
-              <button key={f} onClick={() => setFolder(f)}
-                style={{ padding:"5px 13px", borderRadius:7, border:"1px solid", fontSize:11, fontWeight:700, cursor:"pointer",
-                  background:folder===f?"#4B38C8":"#fff", color:folder===f?"#fff":"#C0BCCE", borderColor:folder===f?"#4B38C8":"#C9BCEE" }}>
-                {f==="all"?"すべて":`📂 ${f}`}
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div style={{ flex:1, overflowY:"auto", padding:"16px 24px" }}>
-        <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(220px,1fr))", gap:12 }}>
-          {shown.map(t => (
-            <div key={t.id} className="tpl-card" onClick={() => setEditing(t)}
-              style={{ background:"#fff", border:"1px solid #EDE8FF", borderRadius:12, padding:18, cursor:"pointer", transition:"border-color 0.12s" }}>
-              <div style={{ fontSize:22, marginBottom:10 }}>📄</div>
-              <div style={{ fontWeight:700, fontSize:13, color:"#4B38C8", marginBottom:5 }}>{t.title}</div>
-              <div style={{ fontSize:11, color:"#C0BCCE", marginBottom:8 }}>📂 {t.folder}</div>
-              <div style={{ display:"flex", gap:4, flexWrap:"wrap", marginBottom:10 }}>
-                {t.tags.map(tag => <span key={tag} style={{ background:"#E9DFFE", color:"#C0BCCE", borderRadius:4, padding:"2px 7px", fontSize:10, fontWeight:600 }}>#{tag}</span>)}
-              </div>
-              <div style={{ fontSize:11, color:"#7A9AB5", lineHeight:1.6, display:"-webkit-box", WebkitLineClamp:3, WebkitBoxOrient:"vertical", overflow:"hidden" }}>{t.body}</div>
-            </div>
-          ))}
-          <div onClick={() => setEditing({ id:Date.now(), title:"", folder:"", tags:[], body:"" })}
-            style={{ border:"2px dashed #E8E2FF", borderRadius:12, padding:18, cursor:"pointer", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", color:"#7A9AB5", fontSize:13, fontWeight:600, gap:8, minHeight:120 }}>
-            <span style={{ fontSize:24 }}>+</span>
-            <span>新規作成</span>
-          </div>
-        </div>
-      </div>
-
-      {editing && (
-        <div style={{ position:"fixed", inset:0, background:"rgba(15,20,35,0.5)", zIndex:200, display:"flex", alignItems:"center", justifyContent:"center", backdropFilter:"blur(3px)" }}
-          onClick={() => setEditing(null)}>
-          <div style={{ background:"#fff", borderRadius:16, padding:28, width:480, maxHeight:"80vh", overflowY:"auto" }} onClick={e => e.stopPropagation()}>
-            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:20 }}>
-              <h3 style={{ margin:0, fontSize:15, fontWeight:800, color:"#4B38C8" }}>{editing.title || "新規テンプレート"}</h3>
-              <button onClick={() => setEditing(null)} style={{ ...S.ghost, padding:"4px 8px", border:"none", color:"#C0BCCE" }}>✕</button>
-            </div>
-            {[["title","テンプレート名","例：週刊まとめテンプレート"],["folder","フォルダ","YouTube / SNS / ..."]].map(([k,l,p]) => (
-              <div key={k} style={{ marginBottom:12 }}>
-                <label style={S.label}>{l}</label>
-                <input value={editing[k]} onChange={e => setEditing({...editing,[k]:e.target.value})} placeholder={p} style={S.input} />
-              </div>
-            ))}
-            <div style={{ marginBottom:12 }}>
-              <label style={S.label}>タグ（カンマ区切り）</label>
-              <input value={editing.tags.join(", ")} onChange={e => setEditing({...editing,tags:e.target.value.split(",").map(t=>t.trim()).filter(Boolean)})} style={S.input} placeholder="動画, まとめ" />
-            </div>
-            <div style={{ marginBottom:20 }}>
-              <label style={S.label}>テンプレート内容</label>
-              <textarea value={editing.body} onChange={e => setEditing({...editing,body:e.target.value})} style={{ ...S.input, minHeight:160, resize:"vertical", lineHeight:1.8 }} />
-            </div>
-            <div style={{ display:"flex", gap:8, justifyContent:"space-between" }}>
-              <button onClick={() => { if(window.confirm("削除しますか？")) { deleteTpl(editing.id); setEditing(null); } }}
-                style={{ ...S.ghost, color:"#EF4444", borderColor:"#FECACA" }}>削除</button>
-              <div style={{ display:"flex", gap:8 }}>
-                <button className="btn-ghost" onClick={() => setEditing(null)} style={S.ghost}>キャンセル</button>
-                <button onClick={() => saveTpl(editing)} style={S.primary}>保存する</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {notionOpen && <NotionImportPanel onImport={importFromNotion} onClose={() => setNotionOpen(false)} />}
-    </div>
-  );
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// SUMMARY EMAIL PREVIEW MODAL
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-function SummaryEmailModal({ posts, onClose }) {
-  const _today = new Date();
-  const dateStr = `${_today.getFullYear()}年${_today.getMonth()+1}月${_today.getDate()}日（${["日","月","火","水","木","金","土"][_today.getDay()]}）`;
-  const sendTime = "08:00";
-
-  const todayPosts   = posts.filter(p => p.date === todayStr());
-  const tomorrowStr  = addDays(todayStr(), 1);
-  const tomorrowPosts= posts.filter(p => p.date === tomorrowStr);
-  const weekPosts    = posts.filter(p => p.date > todayStr() && p.date <= addDays(todayStr(), 6));
-  const alertPosts   = posts.filter(p => p.date < todayStr() && p.status !== "live");
-  const statusCounts = {};
-  STATUSES.forEach(s => { statusCounts[s.id] = posts.filter(p => p.status === s.id).length; });
-
-  const Section = ({ title, children, bg="#EDE6FF" }) => (
-    <div style={{ marginBottom:20 }}>
-      <div style={{ fontSize:11, fontWeight:800, color:"#7A9AB5", letterSpacing:"0.1em", marginBottom:8 }}>{title}</div>
-      <div style={{ background:bg, borderRadius:10, overflow:"hidden" }}>{children}</div>
-    </div>
-  );
-
-  const PostRow = ({ post }) => {
-    const s = STATUSES.find(x => x.id === post.status);
-    const pl = PLATFORMS.find(x => post.platforms[0] === x.id);
-    return (
-      <div style={{ padding:"10px 16px", borderBottom:"1px solid #EDE8FF", display:"flex", alignItems:"center", gap:12 }}>
-        <div style={{ width:3, height:28, borderRadius:2, background:s?.color, flexShrink:0 }} />
-        <div style={{ flex:1 }}>
-          <div style={{ fontSize:13, fontWeight:700, color:"#4B38C8" }}>{post.title}</div>
-          <div style={{ fontSize:11, color:"#7A9AB5", marginTop:2 }}>{post.time} {pl ? `· ${pl.name}` : ""}</div>
-        </div>
-        <span style={{ fontSize:10, fontWeight:800, color:s?.color, background:`${s?.color}15`, borderRadius:5, padding:"2px 8px" }}>{s?.label}</span>
-      </div>
-    );
-  };
-
-  return (
-    <div style={{ position:"fixed", inset:0, background:"rgba(15,20,35,0.7)", zIndex:600, display:"flex", alignItems:"center", justifyContent:"center", backdropFilter:"blur(4px)" }}
-      onClick={onClose}>
-      <div style={{ width:560, maxHeight:"88vh", display:"flex", flexDirection:"column", background:"#fff", borderRadius:16, boxShadow:"0 24px 60px rgba(0,0,0,0.3)", overflow:"hidden", animation:"searchIn 0.18s ease" }}
-        onClick={e => e.stopPropagation()}>
-
-        {/* Email chrome */}
-        <div style={{ background:"#DDD6FF", padding:"16px 24px", flexShrink:0 }}>
-          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-            <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-              <div style={{ width:8, height:8, borderRadius:"50%", background:"#EF4444" }} />
-              <div style={{ width:8, height:8, borderRadius:"50%", background:"#D97706" }} />
-              <div style={{ width:8, height:8, borderRadius:"50%", background:"#059669" }} />
-            </div>
-            <span style={{ fontSize:11, color:"#C0BCCE", fontWeight:600 }}>メールプレビュー</span>
-            <button onClick={onClose} style={{ background:"none", border:"none", color:"#C0BCCE", cursor:"pointer", fontSize:16 }}>✕</button>
-          </div>
-        </div>
-
-        {/* Email meta */}
-        <div style={{ padding:"16px 24px 0", borderBottom:"1px solid #EDE8FF", flexShrink:0 }}>
-          <div style={{ marginBottom:8 }}>
-            <div style={{ fontSize:10, color:"#7A9AB5", fontWeight:700, letterSpacing:"0.08em", marginBottom:2 }}>FROM</div>
-            <div style={{ fontSize:13, color:"#4B38C8" }}>{"DelivCast <noreply@delivcast.app>"}</div>
-          </div>
-          <div style={{ marginBottom:8 }}>
-            <div style={{ fontSize:10, color:"#7A9AB5", fontWeight:700, letterSpacing:"0.08em", marginBottom:2 }}>件名</div>
-            <div style={{ fontSize:15, fontWeight:800, color:"#4B38C8" }}>📅 [{dateStr}] 配信サマリー — {todayPosts.length}件のスケジュール</div>
-          </div>
-          <div style={{ marginBottom:12, display:"flex", gap:16, fontSize:11, color:"#7A9AB5" }}>
-            <span>送信時刻: {sendTime}</span>
-            <span>自動送信</span>
-          </div>
-        </div>
-
-        {/* Email body */}
-        <div style={{ flex:1, overflowY:"auto", padding:"20px 24px" }}>
-          {/* Hero */}
-          <div style={{ background:"linear-gradient(135deg, #6D4EE8, #9B6FF0)", borderRadius:12, padding:"20px 24px", marginBottom:20, color:"#fff" }}>
-            <div style={{ fontSize:12, color:"rgba(255,255,255,0.5)", marginBottom:4, letterSpacing:"0.08em" }}>DelivCast 配信サマリー</div>
-            <div style={{ fontSize:22, fontWeight:900, letterSpacing:"-0.02em" }}>{dateStr}</div>
-            <div style={{ fontSize:12, color:"rgba(255,255,255,0.5)", marginTop:4 }}>おはようございます。本日の配信スケジュールです。</div>
-            {/* Status bar */}
-            <div style={{ display:"flex", gap:12, marginTop:16, flexWrap:"wrap" }}>
-              {STATUSES.map(s => (
-                <div key={s.id} style={{ textAlign:"center" }}>
-                  <div style={{ fontSize:20, fontWeight:900, color:s.color }}>{statusCounts[s.id]}</div>
-                  <div style={{ fontSize:9, color:"rgba(255,255,255,0.4)", fontWeight:700 }}>{s.label}</div>
-                </div>
               ))}
             </div>
           </div>
-
-          {/* Alert */}
-          {alertPosts.length > 0 && (
-            <div style={{ background:"#FEF2F2", border:"1px solid #FECACA", borderRadius:10, padding:"12px 16px", marginBottom:20, display:"flex", gap:10 }}>
-              <span style={{ fontSize:16 }}>⚠️</span>
-              <div>
-                <div style={{ fontSize:12, fontWeight:800, color:"#EF4444", marginBottom:4 }}>期限切れの配信があります</div>
-                {alertPosts.map(p => <div key={p.id} style={{ fontSize:11, color:"#DC2626" }}>· {p.title}（{p.date.slice(5).replace("-","/")}）</div>)}
-              </div>
-            </div>
-          )}
-
-          {/* Today */}
-          <Section title="TODAY — 本日の配信">
-            {todayPosts.length === 0
-              ? <div style={{ padding:"16px", fontSize:13, color:"#7A9AB5" }}>本日の配信はありません</div>
-              : todayPosts.map(p => <PostRow key={p.id} post={p} />)}
-          </Section>
-
-          {/* Tomorrow */}
-          <Section title="TOMORROW — 明日の配信">
-            {tomorrowPosts.length === 0
-              ? <div style={{ padding:"16px", fontSize:13, color:"#7A9AB5" }}>明日の配信はありません</div>
-              : tomorrowPosts.map(p => <PostRow key={p.id} post={p} />)}
-          </Section>
-
-          {/* This week */}
-          <Section title="THIS WEEK — 今週の残り配信">
-            {weekPosts.length === 0
-              ? <div style={{ padding:"16px", fontSize:13, color:"#7A9AB5" }}>今週の配信はありません</div>
-              : weekPosts.map(p => <PostRow key={p.id} post={p} />)}
-          </Section>
-
-          {/* Footer */}
-          <div style={{ borderTop:"1px solid #EDE8FF", paddingTop:16, fontSize:11, color:"#7A9AB5", textAlign:"center", lineHeight:1.8 }}>
-            このメールはDelivCastから毎朝{sendTime}に自動送信されます<br/>
-            設定 → 通知設定 から変更できます
-          </div>
+        )}
+        {/* 時刻 */}
+        <div style={{minWidth:80}}>
+          <label style={{fontSize:10,color:"#888",fontWeight:700,display:"block",marginBottom:4}}>時刻</label>
+          <select value={hour} onChange={e=>setHour(Number(e.target.value))}
+            style={{border:"1.5px solid #e0d8ce",borderRadius:7,padding:"5px 8px",fontSize:12,color:"#555",outline:"none",cursor:"pointer",background:"#fff",fontFamily:"inherit"}}>
+            {HOURS.map(h=><option key={h} value={h}>{String(h).padStart(2,"0")}:00</option>)}
+          </select>
         </div>
       </div>
+
+      {/* 投稿種類 */}
+      <div style={{marginBottom:10}}>
+        <label style={{fontSize:10,color:"#888",fontWeight:700,display:"block",marginBottom:4}}>投稿種類</label>
+        <select value={postType} onChange={e=>setPostType(e.target.value)}
+          style={{border:`1.5px solid ${pt.border}`,borderRadius:20,padding:"4px 10px",fontSize:11,fontWeight:700,color:pt.color,background:pt.bg,cursor:"pointer",fontFamily:"inherit",outline:"none"}}>
+          {Object.entries(POST_TYPE).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
+        </select>
+      </div>
+
+      <div style={{background:"#fff",border:"1px solid #fcd34d",borderRadius:7,padding:"6px 10px",fontSize:11,color:"#92400e",marginBottom:10,fontWeight:600,display:"flex",alignItems:"center",gap:6}}>
+        <span>📅 {preview}</span>
+        <span style={{color:pt.color,background:pt.bg,border:`1px solid ${pt.border}`,borderRadius:10,padding:"0 7px",fontSize:10,fontWeight:700}}>{pt.label}</span>
+      </div>
+
+      <button onClick={()=>onAdd({type,dow,nth,hour,postType,title:""})}
+        style={{width:"100%",background:"#f59e0b",border:"none",borderRadius:20,padding:"8px 0",fontSize:12,fontWeight:800,color:"#fff",cursor:"pointer",fontFamily:"inherit"}}>
+        この枠を追加
+      </button>
     </div>
   );
 }
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// SETTINGS VIEW
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-function SettingsView({ recurringRules, setRecurringRules, notifSettings, setNotifSettings, showToast, allPosts, templates }) {
-  const [editRule, setEditRule] = useState(null);
-  const [emailPreviewOpen, setEmailPreviewOpen] = useState(false);
-  const FREQ_LABELS = { daily:"毎日", weekly:"毎週", biweekly:"隔週", monthly:"毎月（日付）", monthly_weekday:"毎月（曜日）" };
-
-  const saveRule = async (r) => {
-    try {
-      const isNew = !recurringRules.some(x => x.id === r.id);
-      const method = isNew ? "POST" : "PUT";
-      const url    = isNew ? "/api/recurring" : `/api/recurring/${r.id}`;
-      const res    = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(r) });
-      if (!res.ok) throw new Error(await res.text());
-      const saved = await res.json();
-      setRecurringRules(rs => isNew ? [...rs, saved] : rs.map(x => x.id === r.id ? saved : x));
-      setEditRule(null); showToast("定期スケジュールを保存しました");
-    } catch (e) { showToast("保存に失敗しました"); console.error(e); }
-  };
-
-  return (
-    <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"hidden" }}>
-      <div style={{ padding:"14px 24px 12px", background:"#F8F5FF", borderBottom:"1px solid #E8E2FF", flexShrink:0 }}>
-        <h2 style={{ margin:0, fontSize:17, fontWeight:800, color:"#4B38C8" }}>設定</h2>
-      </div>
-      <div style={{ flex:1, overflowY:"auto", padding:"20px 24px" }}>
-        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16, maxWidth:800 }}>
-
-          {/* Notifications */}
-          <div style={{ background:"#fff", borderRadius:14, padding:22, border:"1px solid #EDE8FF" }}>
-            <h3 style={{ margin:"0 0 18px", fontSize:14, fontWeight:800, color:"#4B38C8" }}>📧 通知・リマインダー</h3>
-            <label style={S.label}>通知メールアドレス</label>
-            <input value={notifSettings.email} onChange={e => setNotifSettings({...notifSettings,email:e.target.value})} placeholder="you@example.com" style={{ ...S.input, marginBottom:14 }} />
-            <label style={S.label}>毎朝のサマリーメール</label>
-            <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14 }}>
-              <Toggle on={notifSettings.daily} onChange={v => setNotifSettings({...notifSettings,daily:v})} />
-              <span style={{ fontSize:13, color:"#C0BCCE", fontWeight:600 }}>{notifSettings.daily?"ON":"OFF"}</span>
+// ════════════════════════════════════════════════════════
+// 通知設定モーダル
+// ════════════════════════════════════════════════════════
+function NotifySettingsModal({settings,accountName,onSave,onClose,onTestSend}){
+  const [draft,setDraft]=useState({...settings});
+  const [sending,setSending]=useState(false);
+  const changed=JSON.stringify(draft)!==JSON.stringify(settings);
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:800,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}
+      onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+      <div style={{background:"#fff",borderRadius:16,width:"100%",maxWidth:480,maxHeight:"85vh",overflow:"hidden",display:"flex",flexDirection:"column",boxShadow:"0 20px 60px #00000030"}}>
+        {/* ヘッダー */}
+        <div style={{padding:"14px 18px",borderBottom:"1px solid #e8e0d6",display:"flex",alignItems:"center",justifyContent:"space-between",background:"#faf7f3"}}>
+          <div>
+            <div style={{fontWeight:800,fontSize:14}}>🔔 メール通知設定</div>
+            <div style={{fontSize:11,color:"#aaa",marginTop:2}}>{accountName} — Vercel Cronで毎日自動送信</div>
+          </div>
+          <Btn onClick={onClose}>閉じる</Btn>
+        </div>
+        <div style={{flex:1,overflowY:"auto",padding:20,display:"flex",flexDirection:"column",gap:14}}>
+          {/* 有効/無効トグル */}
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",background:draft.enabled?"#f0fdf4":"#f9fafb",border:`1.5px solid ${draft.enabled?"#86efac":"#e0d8ce"}`,borderRadius:10,padding:"12px 14px"}}>
+            <div>
+              <div style={{fontWeight:700,fontSize:13,color:draft.enabled?"#15803d":"#555"}}>通知を{draft.enabled?"有効":"無効"}</div>
+              <div style={{fontSize:11,color:"#888",marginTop:2}}>オンにするとメールが届きます</div>
             </div>
-            {notifSettings.daily && (
-              <><label style={S.label}>送信時刻</label>
-              <input type="time" value={notifSettings.time} onChange={e => setNotifSettings({...notifSettings,time:e.target.value})} style={{ ...S.input, width:120, marginBottom:14 }} /></>
-            )}
-            <label style={S.label}>リマインダー（配信X日前）</label>
-            <input type="number" min={1} max={14} value={notifSettings.reminderDays} onChange={e => setNotifSettings({...notifSettings,reminderDays:+e.target.value})} style={{ ...S.input, width:80, marginBottom:16 }} />
-            <button onClick={() => setEmailPreviewOpen(true)}
-              style={{ ...S.ghost, fontSize:12, fontWeight:700, gap:6, borderStyle:"dashed" }}>
-              📧 サマリーメールのプレビュー
+            <button onClick={()=>setDraft(d=>({...d,enabled:!d.enabled}))}
+              style={{width:44,height:24,borderRadius:12,border:"none",background:draft.enabled?"#22c55e":"#d1d5db",cursor:"pointer",position:"relative",transition:"background .2s"}}>
+              <span style={{position:"absolute",top:2,left:draft.enabled?22:2,width:20,height:20,borderRadius:"50%",background:"#fff",boxShadow:"0 1px 3px #0003",transition:"left .2s",display:"block"}}/>
             </button>
           </div>
-
-          {/* Recurring rules */}
-          <div style={{ background:"#fff", borderRadius:14, padding:22, border:"1px solid #EDE8FF" }}>
-            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:18 }}>
-              <h3 style={{ margin:0, fontSize:14, fontWeight:800, color:"#4B38C8" }}>🔁 定期スケジュール</h3>
-              <button style={{ ...S.primary, padding:"6px 12px", fontSize:11 }}
-                onClick={() => setEditRule({ id:`r${Date.now()}`, title:"", titleTemplate:"", freq:"weekly", weekDay:1, time:"10:00", duration:60, platforms:[], tags:[], active:true, startDate:todayStr(), counter:1 })}>
-                + 追加
-              </button>
-            </div>
-            {recurringRules.map(r => (
-              <div key={r.id} style={{ padding:"12px 0", borderBottom:"1px solid #F0EBFF", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-                <div style={{ flex:1, cursor:"pointer" }} onClick={() => setEditRule(r)}>
-                  <div style={{ fontWeight:700, color:"#4B38C8", fontSize:13 }}>{r.title}</div>
-                  <div style={{ color:"#C0BCCE", fontSize:11, marginTop:2 }}>
-                    {FREQ_LABELS[r.freq]}{r.freq==="weekly"?` 曜日${r.weekDay}`:""} {r.time} · {r.duration}分
-                  </div>
-                  <div style={{ display:"flex", gap:4, marginTop:4, flexWrap:"wrap" }}>
-                    {r.platforms.map(pid => <PlatformChip key={pid} platformId={pid} size="xs" />)}
-                  </div>
-                </div>
-                <Toggle on={r.active} onChange={async v => {
-                  const updated = {...r, active: v};
-                  try {
-                    const res = await fetch(`/api/recurring/${r.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(updated) });
-                    if (!res.ok) throw new Error(await res.text());
-                    setRecurringRules(rs => rs.map(rr => rr.id===r.id?{...rr,active:v}:rr));
-                  } catch (e) { showToast("保存に失敗しました"); }
-                }} />
-              </div>
-            ))}
+          {/* メールアドレス */}
+          <div>
+            <label style={{fontSize:11,fontWeight:700,color:"#888",display:"block",marginBottom:5}}>送信先メールアドレス</label>
+            <input value={draft.email||""} onChange={e=>setDraft(d=>({...d,email:e.target.value}))}
+              placeholder="your@email.com" type="email"
+              style={{...INP,fontSize:13}}
+              onFocus={e=>e.target.style.borderColor="#f59e0b"} onBlur={e=>e.target.style.borderColor="#e0d8ce"}/>
           </div>
-        </div>
-        <button onClick={() => showToast("設定を保存しました")} style={{ ...S.primary, marginTop:20 }}>設定を保存</button>
-      </div>
-
-      {editRule && (
-        <div style={{ position:"fixed", inset:0, background:"rgba(15,20,35,0.5)", zIndex:200, display:"flex", alignItems:"center", justifyContent:"center", backdropFilter:"blur(3px)" }}
-          onClick={() => setEditRule(null)}>
-          <div style={{ background:"#fff", borderRadius:16, padding:28, width:460, maxHeight:"80vh", overflowY:"auto" }} onClick={e => e.stopPropagation()}>
-            <div style={{ display:"flex", justifyContent:"space-between", marginBottom:20 }}>
-              <h3 style={{ margin:0, fontSize:15, fontWeight:800, color:"#4B38C8" }}>定期スケジュール</h3>
-              <button onClick={() => setEditRule(null)} style={{ ...S.ghost, padding:"4px 8px", border:"none", color:"#C0BCCE" }}>✕</button>
-            </div>
-            <label style={S.label}>表示名</label>
-            <input value={editRule.title} onChange={e => setEditRule({...editRule,title:e.target.value})} style={{ ...S.input, marginBottom:12 }} placeholder="週刊まとめ動画" />
-            <label style={S.label}>タイトルテンプレート（{"{{n}}"}でカウンター）</label>
-            <input value={editRule.titleTemplate} onChange={e => setEditRule({...editRule,titleTemplate:e.target.value})} style={{ ...S.input, marginBottom:12 }} placeholder="週刊まとめ動画 #{{n}}" />
-            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:12 }}>
-              <div>
-                <label style={S.label}>頻度</label>
-                <select value={editRule.freq} onChange={e => setEditRule({...editRule,freq:e.target.value})} style={{ ...S.input }}>
-                  <option value="daily">毎日</option>
-                  <option value="weekly">毎週</option>
-                  <option value="biweekly">隔週</option>
-                  <option value="monthly">毎月</option>
-                </select>
-              </div>
-              {editRule.freq==="weekly"&&<div>
-                <label style={S.label}>曜日</label>
-                <select value={editRule.weekDay} onChange={e => setEditRule({...editRule,weekDay:+e.target.value})} style={S.input}>
-                  {DAYS_JP.map((d,i) => <option key={i} value={i}>{d}曜日</option>)}
-                </select>
-              </div>}
-              {editRule.freq==="monthly"&&<div>
-                <label style={S.label}>毎月の設定</label>
-                <select value={editRule.monthlyType||"date"} onChange={e => setEditRule({...editRule,monthlyType:e.target.value})} style={{ ...S.input, marginBottom:6 }}>
-                  <option value="date">日付指定（例：毎月15日）</option>
-                  <option value="weekday">曜日指定（例：第1土曜）</option>
-                </select>
-                {(!editRule.monthlyType || editRule.monthlyType==="date") ? (
-                  <select value={editRule.monthDay||1} onChange={e => setEditRule({...editRule,monthDay:+e.target.value})} style={S.input}>
-                    {Array.from({length:31},(_,i)=>i+1).map(d=><option key={d} value={d}>{d}日</option>)}
-                  </select>
-                ) : (
-                  <div style={{ display:"flex", gap:6 }}>
-                    <select value={editRule.weekOfMonth||1} onChange={e => setEditRule({...editRule,weekOfMonth:+e.target.value})} style={{ ...S.input, flex:1 }}>
-                      {[1,2,3,4].map(n=><option key={n} value={n}>第{n}</option>)}
-                    </select>
-                    <select value={editRule.weekDay??6} onChange={e => setEditRule({...editRule,weekDay:+e.target.value})} style={{ ...S.input, flex:1 }}>
-                      {["日","月","火","水","木","金","土"].map((d,i)=><option key={i} value={i}>{d}曜日</option>)}
-                    </select>
+          {/* 送信時刻 */}
+          <div>
+            <label style={{fontSize:11,fontWeight:700,color:"#888",display:"block",marginBottom:5}}>送信時刻</label>
+            <select value={draft.send_hour} onChange={e=>setDraft(d=>({...d,send_hour:Number(e.target.value)}))}
+              style={{border:"1.5px solid #e0d8ce",borderRadius:8,padding:"7px 10px",fontSize:13,color:"#555",outline:"none",cursor:"pointer",background:"#fff",fontFamily:"inherit"}}>
+              {HOURS.map(h=><option key={h} value={h}>{String(h).padStart(2,"0")}:00</option>)}
+            </select>
+            <span style={{fontSize:11,color:"#aaa",marginLeft:8}}>（JST）毎日この時刻に送信</span>
+          </div>
+          {/* 通知種別 */}
+          <div>
+            <label style={{fontSize:11,fontWeight:700,color:"#888",display:"block",marginBottom:8}}>通知内容</label>
+            <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              {[
+                ["notify_overdue","⚠️ 未投稿アラート","予約済みのまま期限が過ぎた投稿を通知"],
+                ["notify_today","📅 本日の予定","当日の予約済み投稿一覧を朝に通知"],
+                ["notify_daily","📊 日次ダイジェスト","全ステータスの進捗サマリーを通知"],
+              ].map(([key,label,desc])=>(
+                <label key={key} style={{display:"flex",alignItems:"flex-start",gap:10,cursor:"pointer",background:"#f7f9f9",border:`1.5px solid ${draft[key]?"#f59e0b":"#e0d8ce"}`,borderRadius:9,padding:"10px 12px"}}>
+                  <input type="checkbox" checked={!!draft[key]} onChange={e=>setDraft(d=>({...d,[key]:e.target.checked}))} style={{marginTop:2,accentColor:"#f59e0b",width:15,height:15}}/>
+                  <div>
+                    <div style={{fontSize:12,fontWeight:700,color:"#0f1419"}}>{label}</div>
+                    <div style={{fontSize:10,color:"#888",marginTop:2}}>{desc}</div>
                   </div>
-                )}
-              </div>}
-              <div>
-                <label style={S.label}>時刻</label>
-                <input type="time" value={editRule.time} onChange={e => setEditRule({...editRule,time:e.target.value})} style={S.input} />
-              </div>
-              <div>
-                <label style={S.label}>所要時間（分）</label>
-                <input type="number" value={editRule.duration} onChange={e => setEditRule({...editRule,duration:+e.target.value})} style={S.input} />
-              </div>
-            </div>
-            <div style={{ marginBottom:12 }}>
-              <label style={S.label}>開始カウンター番号</label>
-              <input type="number" min={1} value={editRule.counter} onChange={e => setEditRule({...editRule,counter:+e.target.value})} style={{ ...S.input, width:80 }} />
-            </div>
-            <div style={{ marginBottom:12 }}>
-              <label style={S.label}>開始日</label>
-              <input type="date" value={editRule.startDate} onChange={e => setEditRule({...editRule,startDate:e.target.value})} style={S.input} />
-            </div>
-            <div style={{ marginBottom:20 }}>
-              <label style={S.label}>配信先</label>
-              <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
-                {PLATFORMS.map(pl => {
-                  const on = editRule.platforms.includes(pl.id);
-                  return <div key={pl.id} onClick={() => setEditRule({...editRule,platforms:on?editRule.platforms.filter(x=>x!==pl.id):[...editRule.platforms,pl.id]})}
-                    style={{ padding:"4px 10px", borderRadius:6, border:`1.5px solid ${on?pl.color:"#C9BCEE"}`, background:on?`${pl.color}15`:"#fff", color:on?pl.color:"#C0BCCE", fontSize:11, fontWeight:700, cursor:"pointer" }}>
-                    {pl.icon} {pl.name}
-                  </div>;
-                })}
-              </div>
-            </div>
-            <div style={{ marginBottom:12 }}>
-              <label style={S.label}>デフォルトテンプレート</label>
-              <select value={editRule.defaultTemplateId||""} onChange={e => setEditRule({...editRule,defaultTemplateId:e.target.value?+e.target.value:null})} style={S.input}>
-                <option value="">なし（本文を空にする）</option>
-                {templates.map(t => <option key={t.id} value={t.id}>{t.title} — {t.folder}</option>)}
-              </select>
-              <p style={{ margin:"4px 0 0",fontSize:11,color:"#A89CC8",lineHeight:1.5 }}>投稿を開いたとき自動で本文に挿入されます</p>
-            </div>
-            <div style={{ display:"flex", gap:8, justifyContent:"flex-end" }}>
-              <button onClick={() => setEditRule(null)} style={S.ghost}>キャンセル</button>
-              <button onClick={() => saveRule(editRule)} style={S.primary}>保存する</button>
+                </label>
+              ))}
             </div>
           </div>
-        </div>
-      )}
-      {emailPreviewOpen && <SummaryEmailModal posts={allPosts} onClose={() => setEmailPreviewOpen(false)} />}
-    </div>
-  );
-}
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-function DestView({ showToast }) {
-  const [dests, setDests] = useState(PLATFORMS.map(p => ({ ...p, active:p.id!=="ig", account:`@my_${p.id}` })));
-  const [tgt, setTgt] = useState(TARGETS.map(t => ({ ...t, active:true, accountUrl:"", memo:"" })));
-  const [tab, setTab] = useState("targets");
-  const [saving, setSaving] = useState(false);
-
-  const saveTargets = async () => {
-    setSaving(true);
-    try {
-      for (const t of tgt) {
-        await fetch(`/api/targets`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id: t.id, name: t.name, color: t.color, icon: t.icon, active: t.active, account_url: t.accountUrl, memo: t.memo })
-        });
-      }
-      showToast("配信先を保存しました");
-    } catch (e) { showToast("保存に失敗しました"); }
-    setSaving(false);
-  };
-  return (
-    <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"hidden" }}>
-      <div style={{ padding:"14px 24px 0", background:"#F8F5FF", borderBottom:"1px solid #E8E2FF", flexShrink:0 }}>
-        <h2 style={{ margin:"0 0 12px", fontSize:17, fontWeight:800, color:"#4B38C8" }}>配信先管理</h2>
-        <div style={{ display:"flex" }}>
-          {[["targets","配信管理対象"],["platforms","プラットフォーム"]].map(([id,label]) => (
-            <button key={id} onClick={() => setTab(id)} style={{ padding:"8px 18px", border:"none", borderBottom:`2.5px solid ${tab===id?"#6D4EE8":"transparent"}`, background:"transparent", fontSize:13, fontWeight:tab===id?800:500, color:tab===id?"#6D4EE8":"#6B5EA8", cursor:"pointer" }}>{label}</button>
-          ))}
-        </div>
-      </div>
-      <div style={{ flex:1, overflowY:"auto", padding:"20px 24px" }}>
-        {tab === "targets" && (
-          <div style={{ maxWidth:640, display:"flex", flexDirection:"column", gap:10 }}>
-            {tgt.map((tg,i) => (
-              <div key={tg.id} style={{ background:"#fff", border:`1.5px solid ${tg.active?tg.color+"50":"#D4C8F4"}`, borderRadius:12, padding:"14px 16px", opacity:tg.active?1:0.6 }}>
-                <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:tg.active?10:0 }}>
-                  <div style={{ width:36,height:36,borderRadius:9,background:`${tg.color}18`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,color:tg.color,fontWeight:700 }}>{tg.icon}</div>
-                  <div style={{ flex:1 }}>
-                    <div style={{ fontWeight:800, color:"#1A1040", fontSize:14 }}>{tg.name}</div>
-                    {tg.accountUrl && <a href={tg.accountUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize:11,color:tg.color,textDecoration:"none" }}>{tg.accountUrl.slice(0,44)}{tg.accountUrl.length>44?"…":""} ↗</a>}
-                  </div>
-                  <div onClick={() => setTgt(ts => ts.map((x,j) => j===i?{...x,active:!x.active}:x))}
-                    style={{ width:38,height:22,borderRadius:11,background:tg.active?tg.color:"#D4C8F4",display:"flex",alignItems:"center",padding:"0 3px",cursor:"pointer",transition:"background 0.2s",flexShrink:0 }}>
-                    <div style={{ width:16,height:16,borderRadius:"50%",background:"#fff",marginLeft:tg.active?"auto":0,transition:"margin 0.2s" }} />
-                  </div>
-                </div>
-                {tg.active && (
-                  <div style={{ display:"flex", flexDirection:"column", gap:7 }}>
-                    <div style={{ display:"flex",alignItems:"center",gap:7,background:"#F8F5FF",borderRadius:7,padding:"6px 10px",border:`1px solid ${tg.color}35` }}>
-                      <span style={{ fontSize:11,color:tg.color }}>🔗</span>
-                      <input value={tg.accountUrl} onChange={e => setTgt(ts => ts.map((x,j) => j===i?{...x,accountUrl:e.target.value}:x))}
-                        placeholder={`${tg.name} のアカウントURL`}
-                        style={{ flex:1,border:"none",outline:"none",fontSize:12,color:"#1A1040",fontFamily:"inherit",background:"transparent" }} />
-                      {tg.accountUrl && <a href={tg.accountUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize:10,color:tg.color,fontWeight:700,textDecoration:"none",background:`${tg.color}15`,padding:"3px 7px",borderRadius:4 }}>開く↗</a>}
-                    </div>
-                    <textarea value={tg.memo} onChange={e => setTgt(ts => ts.map((x,j) => j===i?{...x,memo:e.target.value}:x))}
-                      placeholder="メモ（更新頻度・読者数など）" rows={2}
-                      style={{ border:"1px solid #E0D8FF",borderRadius:7,padding:"6px 10px",fontSize:12,color:"#4B3F8A",fontFamily:"inherit",background:"#FAFCFF",resize:"none",outline:"none",lineHeight:1.6 }} />
-                  </div>
-                )}
-              </div>
-            ))}
+          {/* セットアップ案内 */}
+          <div style={{background:"#fffbeb",border:"1px solid #fde68a",borderRadius:8,padding:"10px 12px",fontSize:11,color:"#92400e",lineHeight:1.7}}>
+            <div style={{fontWeight:700,marginBottom:4}}>📋 セットアップ手順</div>
+            <div>1. <strong>Resend</strong>（resend.com）でAPIキーを取得</div>
+            <div>2. Vercel環境変数に <code style={{background:"#fef3c7",padding:"0 4px",borderRadius:3}}>RESEND_API_KEY</code> を追加</div>
+            <div>3. <code style={{background:"#fef3c7",padding:"0 4px",borderRadius:3}}>vercel.json</code> でCronを設定（下記ファイル参照）</div>
           </div>
-        )}
-        <div style={{ padding:"16px 0" }}>
-          <button onClick={saveTargets} disabled={saving} style={{ ...S.primary, opacity:saving?0.6:1 }}>
-            {saving ? "保存中..." : "配信先を保存"}
+        </div>
+        {/* フッター */}
+        <div style={{padding:"12px 18px",borderTop:"1px solid #e8e0d6",display:"flex",gap:8,background:"#faf7f3"}}>
+          <button onClick={async()=>{setSending(true);await onTestSend(draft.email);setSending(false);}}
+            disabled={!draft.email||sending}
+            style={{border:"1.5px solid #e0d8ce",background:"#fff",borderRadius:8,padding:"7px 14px",fontSize:12,fontWeight:600,color:draft.email?"#555":"#bbb",cursor:draft.email?"pointer":"default",fontFamily:"inherit"}}>
+            {sending?"送信中…":"📨 テスト送信"}
           </button>
-        </div>
-
-        {tab === "platforms" && (
-          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(260px,1fr))", gap:12 }}>
-            {dests.map(d => (
-              <div key={d.id} style={{ background:"#fff",border:"1px solid #EDE8FF",borderRadius:12,padding:18,opacity:d.active?1:0.55 }}>
-                <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center" }}>
-                  <div style={{ display:"flex",gap:12,alignItems:"center" }}>
-                    <div style={{ width:38,height:38,borderRadius:10,background:`${d.color}18`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:17,color:d.color }}>{d.icon}</div>
-                    <div>
-                      <div style={{ fontWeight:700,color:"#4B38C8",fontSize:14 }}>{d.name}</div>
-                      <div style={{ color:"#C0BCCE",fontSize:11,marginTop:2 }}>{d.account}</div>
-                    </div>
-                  </div>
-                  <Toggle on={d.active} onChange={v => setDests(ds => ds.map(dd => dd.id===d.id?{...dd,active:v}:dd))} />
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// SETUP VIEW
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-function SetupView({ posts, templates, recurringRules, showToast }) {
-  const [sbUrl, setSbUrl] = useState("");
-  const [sbKey, setSbKey] = useState("");
-  const [notionToken, setNotionToken] = useState("");
-  const [sbStatus, setSbStatus] = useState(null);
-  const [checking, setChecking] = useState(false);
-  const [tab, setTab] = useState("supabase");
-
-  const checkSupabase = async () => {
-    if (!sbUrl || !sbKey) return;
-    setChecking(true); setSbStatus(null);
-    try {
-      const r = await fetch(`${sbUrl}/rest/v1/`, {
-        headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}` }
-      });
-      setSbStatus(r.ok ? "ok" : "error");
-    } catch (e) { setSbStatus("error"); }
-    setChecking(false);
-  };
-
-  const exportData = () => {
-    const data = { posts, templates, recurringRules, exportedAt: new Date().toISOString() };
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "delivcast-export.json";
-    a.click();
-    showToast("データをエクスポートしました");
-  };
-
-  const sInput = { width:"100%", border:"1px solid #D8D0F8", borderRadius:8, padding:"9px 12px", fontSize:13, color:"#1A1040", outline:"none", background:"#FAFCFF", fontFamily:"inherit", boxSizing:"border-box" };
-  const sLabel = { fontSize:11, fontWeight:700, color:"#7C74A8", display:"block", marginBottom:4, letterSpacing:"0.04em" };
-  const sCard = { background:"#fff", border:"1px solid #E0D8FF", borderRadius:12, padding:"18px 20px", marginBottom:16 };
-  const sH = { fontSize:13, fontWeight:800, color:"#4B38C8", margin:"0 0 12px", letterSpacing:"-0.01em" };
-  const sStep = { display:"flex", gap:10, marginBottom:10 };
-  const sBall = { width:22, height:22, borderRadius:"50%", background:"#6D4EE8", color:"#fff", fontSize:11, fontWeight:800, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 };
-  const sText = { fontSize:13, color:"#1A1040", lineHeight:1.7 };
-
-  return (
-    <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"hidden" }}>
-      <div style={{ padding:"14px 24px 0", background:"#F8F5FF", borderBottom:"1px solid #E8E2FF", flexShrink:0 }}>
-        <h2 style={{ margin:"0 0 12px", fontSize:17, fontWeight:800, color:"#4B38C8" }}>データ連携</h2>
-        <div style={{ display:"flex" }}>
-          {[["supabase","Supabase"],["notion","Notion"],["export","データ管理"]].map(([id,label]) => (
-            <button key={id} onClick={() => setTab(id)} style={{ padding:"8px 18px", border:"none", borderBottom:`2.5px solid ${tab===id?"#6D4EE8":"transparent"}`, background:"transparent", fontSize:13, fontWeight:tab===id?800:500, color:tab===id?"#6D4EE8":"#6B5EA8", cursor:"pointer" }}>
-              {label}
-            </button>
-          ))}
-        </div>
-      </div>
-      <div style={{ flex:1, overflowY:"auto", padding:"22px 28px" }}>
-        <div style={{ maxWidth:600 }}>
-
-          {tab === "supabase" && (
-            <div>
-              <div style={sCard}>
-                <p style={sH}>接続設定</p>
-                <div style={{ marginBottom:12 }}>
-                  <span style={sLabel}>SUPABASE URL</span>
-                  <input value={sbUrl} onChange={e => setSbUrl(e.target.value)} placeholder="https://xxxxxxxxxxxx.supabase.co" style={sInput} />
-                </div>
-                <div style={{ marginBottom:16 }}>
-                  <span style={sLabel}>ANON KEY</span>
-                  <input value={sbKey} onChange={e => setSbKey(e.target.value)} placeholder="eyJhbGciOiJIUzI1NiIs..." type="password" style={sInput} />
-                  <p style={{ margin:"5px 0 0", fontSize:11, color:"#A89CC8" }}>Supabase Dashboard → Settings → API から取得</p>
-                </div>
-                <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-                  <button onClick={checkSupabase} disabled={checking||!sbUrl||!sbKey}
-                    style={{ padding:"9px 18px", borderRadius:8, border:"none", background:(!sbUrl||!sbKey)?"#E9DFFE":"#6D4EE8", color:(!sbUrl||!sbKey)?"#B0A8D8":"#fff", fontSize:13, fontWeight:700, cursor:(!sbUrl||!sbKey)?"default":"pointer" }}>
-                    {checking ? "確認中..." : "接続テスト"}
-                  </button>
-                  {sbStatus === "ok"    && <span style={{ fontSize:13, color:"#059669", fontWeight:700 }}>✓ 接続成功</span>}
-                  {sbStatus === "error" && <span style={{ fontSize:13, color:"#EF4444", fontWeight:700 }}>✗ 接続失敗 — URLとキーを確認</span>}
-                </div>
-              </div>
-
-              <div style={sCard}>
-                <p style={sH}>.env.local の設定</p>
-                <div style={{ background:"#1E1B4B", borderRadius:10, padding:"14px 16px", fontFamily:"monospace", fontSize:12, lineHeight:2 }}>
-                  <div><span style={{ color:"#6EE7B7" }}>NEXT_PUBLIC_SUPABASE_URL</span><span style={{ color:"#94A3B8" }}>=</span><span style={{ color:"#FDE68A" }}>{sbUrl || "https://xxxx.supabase.co"}</span></div>
-                  <div><span style={{ color:"#6EE7B7" }}>NEXT_PUBLIC_SUPABASE_ANON_KEY</span><span style={{ color:"#94A3B8" }}>=</span><span style={{ color:"#FDE68A" }}>{sbKey ? sbKey.slice(0,20)+"..." : "eyJh..."}</span></div>
-                  <div><span style={{ color:"#6EE7B7" }}>NOTION_TOKEN</span><span style={{ color:"#94A3B8" }}>=</span><span style={{ color:"#FDE68A" }}>secret_xxxx</span></div>
-                </div>
-              </div>
-
-              <div style={sCard}>
-                <p style={sH}>作成するテーブル</p>
-                {[["posts","配信スケジュール本体"],["post_targets","投稿ごとの配信先+URL"],["templates","テンプレート"],["recurring_rules","定期繰り返しルール"],["targets","配信管理対象マスター"]].map(([t,d]) => (
-                  <div key={t} style={{ display:"flex", justifyContent:"space-between", padding:"7px 0", borderBottom:"1px solid #F0EBFF", fontSize:13 }}>
-                    <code style={{ background:"#EDE6FF", color:"#4B38C8", borderRadius:4, padding:"1px 7px", fontSize:12 }}>{t}</code>
-                    <span style={{ color:"#7C74A8", fontSize:12 }}>{d}</span>
-                  </div>
-                ))}
-                <p style={{ margin:"10px 0 0", fontSize:11, color:"#A89CC8" }}>完全なDDLは「実装ロードマップ」ドキュメントを参照</p>
-              </div>
-            </div>
-          )}
-
-          {tab === "notion" && (
-            <div>
-              <div style={sCard}>
-                <p style={sH}>インテグレーショントークンの取得</p>
-                <div style={{ marginBottom:16 }}>
-                  <span style={sLabel}>NOTION TOKEN（確認用）</span>
-                  <input value={notionToken} onChange={e => setNotionToken(e.target.value)} placeholder="secret_xxxxxxxxxxxxxxxxxxxx" type="password" style={sInput} />
-                </div>
-                {[
-                  ["1","Notion → 設定 → インテグレーション → 新しいインテグレーションを作成"],
-                  ["2","タイプ:「内部」/ ワークスペースを選択 → 保存"],
-                  ["3","secret_ から始まるトークンをコピーして上の欄に保存"],
-                  ["4","取り込みたいページを開き、右上「…」→ 接続を追加 でインテグレーションを選択"],
-                ].map(([n, txt]) => (
-                  <div key={n} style={sStep}>
-                    <div style={sBall}>{n}</div>
-                    <div style={sText}>{txt}</div>
-                  </div>
-                ))}
-                <p style={{ margin:"8px 0 0", fontSize:11, color:"#A89CC8", lineHeight:1.7 }}>
-                  本番環境では .env.local の NOTION_TOKEN に設定し、/api/notion ルート経由で呼び出します。
-                </p>
-              </div>
-              <div style={sCard}>
-                <p style={sH}>Notionからの取り込み手順</p>
-                {[
-                  ["1","設定画面 → 「Notionから取り込む」パネルを開く"],
-                  ["2","ページ名で検索 → 「本文を確認」で内容をプレビュー"],
-                  ["3","「取り込む」でテンプレートとして保存"],
-                ].map(([n, txt]) => (
-                  <div key={n} style={sStep}>
-                    <div style={sBall}>{n}</div>
-                    <div style={sText}>{txt}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {tab === "export" && (
-            <div>
-              <div style={sCard}>
-                <p style={sH}>現在のデータをエクスポート</p>
-                <p style={{ fontSize:13, color:"#7C74A8", margin:"0 0 14px", lineHeight:1.7 }}>
-                  投稿 <strong style={{ color:"#4B38C8" }}>{posts.length}件</strong>、テンプレート <strong style={{ color:"#4B38C8" }}>{templates.length}件</strong>、定期ルール <strong style={{ color:"#4B38C8" }}>{recurringRules.length}件</strong> を JSON でダウンロードします。Supabase 移行時のシードデータとして使えます。
-                </p>
-                <button onClick={exportData} style={{ padding:"10px 20px", borderRadius:8, border:"none", background:"#6D4EE8", color:"#fff", fontSize:13, fontWeight:700, cursor:"pointer" }}>
-                  ⬇ delivcast-export.json をダウンロード
-                </button>
-              </div>
-              <div style={sCard}>
-                <p style={sH}>Supabase へのインポート手順</p>
-                {[
-                  ["1","上記ボタンで delivcast-export.json を取得"],
-                  ["2","DDLを実行してテーブルを作成済みであることを確認"],
-                  ["3","ダッシュボードの Table Editor → Insert rows でインポート、またはコードで一括挿入"],
-                ].map(([n, txt]) => (
-                  <div key={n} style={sStep}>
-                    <div style={sBall}>{n}</div>
-                    <div style={sText}>{txt}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
+          <div style={{flex:1}}/>
+          <Btn onClick={onClose}>キャンセル</Btn>
+          <Btn primary onClick={()=>onSave(draft)} style={{opacity:changed?1:0.5,cursor:changed?"pointer":"default"}}>保存</Btn>
         </div>
       </div>
     </div>
   );
 }
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// HELP VIEW
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-const HELP_SECTIONS = [
-  { id:"overview",  label:"画面構成" },
-  { id:"calendar",  label:"カレンダー" },
-  { id:"editor",    label:"投稿エディタ" },
-  { id:"template",  label:"テンプレート" },
-  { id:"recurring", label:"定期配信" },
-  { id:"dest",      label:"配信先管理" },
-  { id:"shortcuts", label:"ショートカット" },
-  { id:"workflow",  label:"配信ワークフロー" },
-];
+// ── ⑦ キーボードショートカット一覧（ヘルプ） ──
+// （将来的にモーダルとして表示）
+// N=新規, ←/→=週移動, C=ビュー切替, E=編集, ⌘K=検索
 
-function HelpView() {
-  const [section, setSection] = useState("overview");
-
-  const sH2  = { fontSize:16, fontWeight:800, color:"#4B38C8", margin:"0 0 16px", borderBottom:"2px solid #E9DFFE", paddingBottom:8 };
-  const sH3  = { fontSize:13, fontWeight:800, color:"#1A1040", margin:"18px 0 8px" };
-  const sP   = { fontSize:13, color:"#4B3F8A", lineHeight:1.8, margin:"0 0 10px" };
-  const sRow = { display:"grid", gridTemplateColumns:"190px 1fr", gap:12, padding:"8px 0", borderBottom:"1px solid #F0EBFF", alignItems:"start" };
-  const sKey = { fontSize:12, color:"#7C74A8", fontWeight:600 };
-  const sVal = { fontSize:12, color:"#1A1040", lineHeight:1.6 };
-  const sKbd = { background:"#EDE6FF", color:"#4B38C8", borderRadius:5, padding:"2px 8px", fontSize:11, fontWeight:700, border:"1px solid #C9BCEE", fontFamily:"monospace" };
-
-  return (
-    <div style={{ display:"flex", height:"100%", overflow:"hidden" }}>
-      <div style={{ width:156, background:"#F8F5FF", borderRight:"1px solid #E8E2FF", flexShrink:0, padding:"14px 0", overflowY:"auto" }}>
-        {HELP_SECTIONS.map(s => (
-          <button key={s.id} onClick={() => setSection(s.id)}
-            style={{ width:"100%", padding:"9px 14px", border:"none", borderLeft:`3px solid ${section===s.id?"#6D4EE8":"transparent"}`, background:section===s.id?"#EDE6FF":"transparent", textAlign:"left", fontSize:12, fontWeight:section===s.id?800:500, color:section===s.id?"#4B38C8":"#6B5EA8", cursor:"pointer" }}>
-            {s.label}
-          </button>
-        ))}
-      </div>
-
-      <div style={{ flex:1, overflowY:"auto", padding:"24px 32px" }}>
-        <div style={{ maxWidth:560 }}>
-
-          {section === "overview" && (
-            <div>
-              <p style={sH2}>画面構成</p>
-              <p style={sP}>DelivCastは左サイドバーで画面を切り替えます。</p>
-              {[
-                ["◫ 週間カレンダー","1週間のスケジュールをタイムライン表示。空きスロットをクリックで新規作成。"],
-                ["≡ 配信リスト","全投稿を一覧表示。ステータスでフィルタリング可能。"],
-                ["⊞ テンプレート","繰り返し使う文章を保存・管理。エディタから検索して挿入できる。"],
-                ["◉ 配信先管理","しあらぼ・ライカレ等の配信管理対象とアカウントURLを管理。"],
-                ["⚙ 設定","定期スケジュール・通知設定・Notion取り込み。"],
-                ["⬡ データ連携","Supabase接続設定・Notionトークン設定・データエクスポート。"],
-                ["? マニュアル","このページ。"],
-              ].map(([k,v]) => (
-                <div key={k} style={sRow}><span style={sKey}>{k}</span><span style={sVal}>{v}</span></div>
-              ))}
-            </div>
-          )}
-
-          {section === "calendar" && (
-            <div>
-              <p style={sH2}>週間カレンダー</p>
-              <p style={sH3}>基本操作</p>
-              {[
-                ["空きスロットをクリック","その日時で新規投稿を作成"],
-                ["投稿ブロックをクリック","右パネルでエディタが開く"],
-                ["◀ ▶ ボタン","前後の週に移動"],
-                ["「今週」ボタン","今週に戻る"],
-              ].map(([k,v]) => (
-                <div key={k} style={sRow}><span style={sKey}>{k}</span><span style={sVal}>{v}</span></div>
-              ))}
-              <p style={sH3}>投稿ブロックの見方</p>
-              <p style={sP}>ブロック内にはステータスバッジ・プラットフォームチップ・配信管理対象チップが表示されます。ブロックの高さは所要時間に比例します。</p>
-            </div>
-          )}
-
-          {section === "editor" && (
-            <div>
-              <p style={sH2}>投稿エディタ</p>
-              <p style={sH3}>エディタタブ</p>
-              <p style={sP}>タイトル・ステータス・日時・本文・メモを編集します。ツールバーから太字 / 斜体 / 区切り / 見出しを挿入できます。</p>
-              <p style={sH3}>テンプレ挿入（検索付き）</p>
-              <p style={sP}>「テンプレ挿入▼」ボタンを押すと検索バーが開きます。タイトル・フォルダ・タグ・本文を横断検索。クリックで本文に挿入されます。</p>
-              <p style={sH3}>設定タブ</p>
-              {[
-                ["ステータス","準備中 / 作成中 / 作成済み / 予約済み / 公開済み"],
-                ["配信先プラットフォーム","YouTube・Twitter等。複数選択可。"],
-                ["配信管理対象とリンク","しあらぼ等をONにすると投稿固有のURLを設定できる。"],
-              ].map(([k,v]) => (
-                <div key={k} style={sRow}><span style={sKey}>{k}</span><span style={sVal}>{v}</span></div>
-              ))}
-              <p style={sH3}>ステータスの流れ</p>
-              <div style={{ display:"flex", alignItems:"center", gap:4, flexWrap:"wrap", margin:"6px 0" }}>
-                {[["#7A9AB5","準備中"],["#D97706","作成中"],["#2563EB","作成済み"],["#7C3AED","予約済み"],["#059669","公開済み"]].map(([c,l],i,a) => (
-                  <span key={l} style={{ display:"flex", alignItems:"center", gap:4 }}>
-                    <span style={{ fontSize:11, color:c, background:`${c}18`, borderRadius:4, padding:"2px 8px", fontWeight:700, borderLeft:`2px solid ${c}` }}>{l}</span>
-                    {i < a.length-1 && <span style={{ color:"#C0BCCE", fontSize:11 }}>→</span>}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {section === "template" && (
-            <div>
-              <p style={sH2}>テンプレート</p>
-              <p style={sP}>よく使う文章のひな型を保存します。フォルダとタグで整理できます。</p>
-              <p style={sH3}>作成方法</p>
-              {[
-                ["「+ テンプレートを追加」","空のテンプレートを作成"],
-                ["エディタ → テンプレ挿入","既存テンプレートを本文に貼り付け"],
-              ].map(([k,v]) => (
-                <div key={k} style={sRow}><span style={sKey}>{k}</span><span style={sVal}>{v}</span></div>
-              ))}
-              <p style={sH3}>定期配信との連携</p>
-              <p style={sP}>設定画面の定期ルールに「デフォルトテンプレート」を設定すると、定期配信の投稿を開いた際に自動で本文が挿入されます。</p>
-            </div>
-          )}
-
-          {section === "recurring" && (
-            <div>
-              <p style={sH2}>定期配信スケジュール</p>
-              <p style={sP}>設定 → 定期スケジュールから作成します。</p>
-              {[
-                ["頻度","毎日 / 毎週 / 隔週 / 毎月"],
-                ["タイトルテンプレート","{{n}} でカウンター自動連番（例：週刊まとめ #42）"],
-                ["デフォルトテンプレート","投稿を開いたとき自動で本文挿入"],
-                ["生成範囲","現在から5週間先まで自動プレビュー"],
-              ].map(([k,v]) => (
-                <div key={k} style={sRow}><span style={sKey}>{k}</span><span style={sVal}>{v}</span></div>
-              ))}
-              <p style={sH3}>確定の仕組み</p>
-              <p style={sP}>生成された定期配信は点線枠で表示されます。編集して保存すると確定済みになり、本文・メモを持つ正式な投稿になります。</p>
-            </div>
-          )}
-
-          {section === "dest" && (
-            <div>
-              <p style={sH2}>配信先管理</p>
-              <p style={sH3}>配信管理対象タブ</p>
-              <p style={sP}>しあらぼ・ライカレ・ゆるラボ・note・X・LINE・メルマガ・その他のチャンネルURLとメモを管理します。</p>
-              <p style={sH3}>投稿ごとのリンク設定</p>
-              <p style={sP}>エディタ → 設定タブ → 配信管理対象とリンク から、その投稿固有のURL（記事URL・動画URLなど）を設定できます。リストやカレンダーにも表示されます。</p>
-              <p style={sH3}>プラットフォームタブ</p>
-              <p style={sP}>YouTube・Twitter/X・TikTok等のSNSアカウントのON/OFFを管理します。</p>
-            </div>
-          )}
-
-          {section === "shortcuts" && (
-            <div>
-              <p style={sH2}>キーボードショートカット</p>
-              {[
-                [["⌘K"],"グローバル検索を開く / 閉じる"],
-                [["Esc"],"検索 / モーダルを閉じる"],
-                [["↑","↓"],"（検索モーダル内）前後の結果へ移動"],
-                [["↵"],"（検索モーダル内）選択して開く"],
-              ].map(([keys, desc]) => (
-                <div key={desc} style={sRow}>
-                  <span style={{ display:"flex", gap:4 }}>
-                    {keys.map(k => <kbd key={k} style={sKbd}>{k}</kbd>)}
-                  </span>
-                  <span style={sVal}>{desc}</span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {section === "workflow" && (
-            <div>
-              <p style={sH2}>推奨ワークフロー</p>
-              <p style={sH3}>週次ルーティン</p>
-              {[
-                ["月曜朝","週間カレンダーで今週の配信計画を確認・調整"],
-                ["配信前日","ステータスを「作成中」→「作成済み」に更新、本文を仕上げる"],
-                ["配信当日","予約投稿後に「予約済み」→ 公開後に「公開済み」に変更"],
-                ["週末","設定 → サマリーメールプレビューで週のまとめを確認"],
-              ].map(([k,v]) => (
-                <div key={k} style={sRow}><span style={sKey}>{k}</span><span style={sVal}>{v}</span></div>
-              ))}
-              <p style={sH3}>Notionとの連携フロー</p>
-              {[
-                ["1. Notionで下書き","記事・台本をNotionで作成"],
-                ["2. 設定 → Notion取り込み","ページ検索 → 「取り込む」でテンプレート化"],
-                ["3. エディタで挿入","テンプレ挿入から対象のページを選んで本文に貼り付け"],
-              ].map(([k,v]) => (
-                <div key={k} style={sRow}><span style={sKey}>{k}</span><span style={sVal}>{v}</span></div>
-              ))}
-              <p style={sH3}>本番移行後のフロー</p>
-              {[
-                ["データ連携 → データ管理","現在のデータをエクスポート"],
-                ["Supabase移行","DDL実行 → データインポート → Vercelデプロイ"],
-                ["以降","Next.js + Supabaseで完全にデータが永続化される"],
-              ].map(([k,v]) => (
-                <div key={k} style={sRow}><span style={sKey}>{k}</span><span style={sVal}>{v}</span></div>
-              ))}
-            </div>
-          )}
-
-        </div>
-      </div>
-    </div>
-  );
+// ── 共通UIコンポーネント ──
+function Btn({children,onClick,primary,danger,style}){
+  const t=primary?{background:"#f59e0b",borderColor:"#f59e0b",color:"#fff"}:danger?{background:"#fff",borderColor:"#fca5a5",color:"#ef4444"}:{background:"#fff",borderColor:"#e0d8ce",color:"#555"};
+  return<button onClick={onClick} style={{border:"1.5px solid",borderRadius:8,padding:"6px 13px",cursor:"pointer",fontSize:12,fontWeight:700,transition:"opacity 0.1s",...t,...style,fontFamily:"inherit"}} onMouseEnter={e=>e.currentTarget.style.opacity=".82"} onMouseLeave={e=>e.currentTarget.style.opacity="1"}>{children}</button>;
 }
-
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// ROOT APP
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-interface Props {
-  initialPosts: Post[]
-  initialTemplates: Template[]
-  initialRecurring: RecurringRule[]
-}
-
-export default function DelivCast({ initialPosts, initialTemplates, initialRecurring }: Props) {
-  const [view, setView] = useState("calendar");
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.innerWidth < 768);
-  useEffect(() => {
-    const handler = () => setIsMobile(window.innerWidth < 768);
-    window.addEventListener("resize", handler);
-    return () => window.removeEventListener("resize", handler);
-  }, []);
-  const [posts, setPosts] = useState<Post[]>(initialPosts);
-  const [templates, setTemplates] = useState<Template[]>(initialTemplates);
-  const [recurringRules, setRecurringRules] = useState<RecurringRule[]>(initialRecurring);
-  const [selectedPost, setSelectedPost] = useState(null);
-  const [weekAnchor, setWeekAnchor] = useState(new Date());
-  const [filterStatus, setFilterStatus] = useState("all");
-  const [toast, setToast] = useState(null);
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [notifSettings, setNotifSettings] = useState({ email:"", daily:true, time:"08:00", reminderDays:2 });
-
-  // Merge real posts + generated recurring previews
-  const allPosts = useMemo(() => {
-    const generated = generateRecurringPosts(recurringRules, posts, 5);
-    return [...posts, ...generated];
-  }, [posts, recurringRules]);
-
-  const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2600); };
-
-  // Cmd+K
-  useEffect(() => {
-    const handler = (e) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "k") { e.preventDefault(); setSearchOpen(s => !s); }
-      if (e.key === "Escape") { setSearchOpen(false); }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, []);
-
-  const upsertPost = useCallback(async (p: Post) => {
-    const isNew = !p.id || String(p.id).startsWith("gen_") || Number(p.id) > 1e12;
-    try {
-      const method = isNew ? "POST" : "PUT";
-      const url    = isNew ? "/api/posts" : `/api/posts/${p.id}`;
-      const res    = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(p) });
-      if (!res.ok) throw new Error(await res.text());
-      const saved: Post = await res.json();
-      setPosts(ps => isNew
-        ? [...ps.filter(x => !String(x.id).startsWith("gen_") || x.recurringId !== p.recurringId || x.date !== p.date), saved]
-        : ps.map(x => x.id === p.id ? saved : x)
-      );
-      setSelectedPost(saved);
-      showToast("保存しました");
-    } catch (e) {
-      showToast("保存に失敗しました");
-      console.error(e);
-    }
-  }, [posts]);
-
-  const deletePost = useCallback(async (id: number | string) => {
-    try {
-      if (!String(id).startsWith("gen_")) {
-        const res = await fetch(`/api/posts/${id}`, { method: "DELETE" });
-        if (!res.ok) throw new Error(await res.text());
-      }
-      setPosts(ps => ps.filter(p => p.id !== id));
-      setSelectedPost(null);
-      showToast("削除しました");
-    } catch (e) {
-      showToast("削除に失敗しました");
-      console.error(e);
-    }
-  }, []);
-
-  const newPost = (date, time) => {
-    setSelectedPost({ id: Date.now(), title:"", date, time: time||"10:00", duration:60, status:"draft", platforms:[], tags:[], body:"", note:"", recurringId:null , postTargets:[] });
-  };
-
-  const [globalEditRule, setGlobalEditRule] = useState(null);
-
-  const newRecurringRule = () => {
-    setGlobalEditRule({ id:`r${Date.now()}`, title:"", titleTemplate:"", freq:"weekly", weekDay:1, time:"10:00", duration:60, platforms:[], tags:[], active:true, startDate:todayStr(), counter:1, defaultTemplateId:null });
-  };
-
-  const saveAsTemplate = async (post) => {
-    const tpl = { title: post.title || "新規テンプレート", folder: "投稿から保存", tags: post.tags ?? [], body: post.body || "" };
-    try {
-      const res = await fetch("/api/templates", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(tpl) });
-      if (!res.ok) throw new Error(await res.text());
-      const saved = await res.json();
-      setTemplates(ts => [...ts, saved]);
-      showToast("テンプレートとして保存しました");
-    } catch (e) { showToast("保存に失敗しました"); console.error(e); }
-  };
-
-  const convertToRecurring = (post) => {
-    setGlobalEditRule({
-      id: `r${Date.now()}`,
-      title: post.title,
-      titleTemplate: post.title,
-      freq: "weekly",
-      weekDay: new Date(post.date).getDay(),
-      time: post.time,
-      duration: post.duration,
-      platforms: post.platforms,
-      tags: post.tags,
-      active: true,
-      startDate: post.date,
-      counter: 1,
-      defaultTemplateId: null,
-    });
-  };
-
-  const saveGlobalRule = async (r) => {
-    try {
-      const isNew = !recurringRules.some(x => x.id === r.id);
-      const method = isNew ? "POST" : "PUT";
-      const url    = isNew ? "/api/recurring" : `/api/recurring/${r.id}`;
-      const res    = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(r) });
-      if (!res.ok) throw new Error(await res.text());
-      const saved = await res.json();
-      setRecurringRules(rs => isNew ? [...rs, saved] : rs.map(x => x.id === r.id ? saved : x));
-      setGlobalEditRule(null);
-      showToast("定期スケジュールを保存しました");
-    } catch (e) { showToast("保存に失敗しました"); console.error(e); }
-  };
-
-  const handleSelectPost = (p) => {
-    setSelectedPost(p);
-    if (view !== "calendar") setView("calendar");
-  };
-
-  const navTo = (id) => {
-    setView(id);
-    if (id !== "calendar") setSelectedPost(null);
-    setSidebarOpen(false);
-  };
-
-  return (
-    <div style={{ display:"flex", height:"100vh", overflow:"hidden", fontFamily:"'Noto Sans JP','Hiragino Kaku Gothic ProN',sans-serif", background:"#F8F5FF", position:"relative" }}>
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&family=DM+Mono:wght@400;500&display=swap');
-        * { box-sizing: border-box; }
-        ::-webkit-scrollbar { width:5px; height:5px; }
-        ::-webkit-scrollbar-track { background:transparent; }
-        ::-webkit-scrollbar-thumb { background:#D1CEC8; border-radius:4px; }
-        select { appearance:none; }
-        input,textarea,select { font-family:inherit; }
-        @keyframes slideIn { from{transform:translateX(18px);opacity:0} to{transform:translateX(0);opacity:1} }
-        @keyframes fadeUp  { from{transform:translateY(6px);opacity:0} to{transform:translateY(0);opacity:1} }
-        @keyframes searchIn{ from{transform:translateY(-10px) scale(0.98);opacity:0} to{transform:translateY(0) scale(1);opacity:1} }
-        @keyframes spin    { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
-        .btn-ghost:hover   { background:rgba(0,0,0,0.05)!important; }
-        .post-row:hover    { background:#F4F0FF!important; }
-        .tpl-card:hover    { border-color:#B8B4AC!important; }
-        .toolbar-btn:hover { background:rgba(0,0,0,0.07)!important; }
-      `}</style>
-
-      {/* MOBILE OVERLAY */}
-      {isMobile && sidebarOpen && (
-        <div onClick={() => setSidebarOpen(false)}
-          style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.45)", zIndex:40 }} />
-      )}
-
-      {/* MOBILE HEADER BAR */}
-      {isMobile && (
-        <div style={{ position:"fixed", top:0, left:0, right:0, height:52, background:"#2D2D35", display:"flex", alignItems:"center", padding:"0 16px", zIndex:50, flexShrink:0 }}>
-          <button onClick={() => setSidebarOpen(v => !v)}
-            style={{ background:"none", border:"none", color:"#F0EEFF", fontSize:20, cursor:"pointer", padding:"4px 8px 4px 0", lineHeight:1 }}>
-            ☰
-          </button>
-          <div style={{ width:22, height:22, borderRadius:6, background:"linear-gradient(135deg,#A78BFA,#C4B5FD)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, color:"#fff", marginRight:7 }}>◫</div>
-          <span style={{ color:"#F0EEFF", fontWeight:900, fontSize:15, letterSpacing:"-0.02em", flex:1 }}>DelivCast</span>
-          <button onClick={() => setSearchOpen(true)}
-            style={{ background:"none", border:"none", color:"#C8C4D8", fontSize:17, cursor:"pointer", padding:"4px" }}>⌕</button>
-        </div>
-      )}
-
-      {/* SIDEBAR */}
-      <aside style={{
-        width:220, background:"#2D2D35", display:"flex", flexDirection:"column", flexShrink:0,
-        ...(isMobile ? {
-          position:"fixed", top:0, left:0, bottom:0, zIndex:50,
-          transform: sidebarOpen ? "translateX(0)" : "translateX(-100%)",
-          transition:"transform 0.22s ease",
-          boxShadow:"4px 0 24px rgba(0,0,0,0.35)",
-        } : {})
-      }}>
-        <div style={{ padding:"22px 20px 14px" }}>
-          <div style={{ display:"flex", alignItems:"center", gap:9 }}>
-            <div style={{ width:28, height:28, borderRadius:8, background:"linear-gradient(135deg,#A78BFA,#C4B5FD)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:13, color:"#fff" }}>◫</div>
-            <span style={{ color:"#F0EEFF", fontWeight:900, fontSize:15, letterSpacing:"-0.02em" }}>DelivCast</span>
-            {isMobile && (
-              <button onClick={() => setSidebarOpen(false)}
-                style={{ background:"none", border:"none", color:"#C8C4D8", fontSize:16, cursor:"pointer", marginLeft:"auto", padding:"2px 4px" }}>✕</button>
-            )}
-          </div>
-          <p style={{ color:"#6B5EA8", fontSize:10, margin:"5px 0 0", letterSpacing:"0.1em", fontWeight:600 }}>配信管理ツール</p>
-        </div>
-
-        {/* Search button */}
-        <div style={{ padding:"0 12px 10px" }}>
-          <div onClick={() => { setSearchOpen(true); setSidebarOpen(false); }}
-            style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 12px", background:"rgba(255,255,255,0.08)", borderRadius:8, cursor:"pointer", border:"1px solid rgba(255,255,255,0.18)" }}>
-            <span style={{ fontSize:13, color:"#C8C4D8" }}>⌕</span>
-            <span style={{ fontSize:12, color:"#C8C4D8", flex:1 }}>検索...</span>
-            {!isMobile && <kbd style={{ fontSize:10, color:"#6B5EA8", background:"rgba(255,255,255,0.08)", borderRadius:4, padding:"1px 5px" }}>⌘K</kbd>}
-          </div>
-        </div>
-
-        <nav style={{ flex:1, padding:"4px 10px" }}>
-          {NAV_ITEMS.map(n => (
-            <div key={n.id} className="nav-item" onClick={() => navTo(n.id)}
-              style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 12px", borderRadius:8, cursor:"pointer", marginBottom:1,
-                background:view===n.id?"rgba(255,255,255,0.12)":"transparent", borderLeft:`2px solid ${view===n.id?"#A78BFA":"transparent"}` }}
-              onMouseEnter={e => { if(view!==n.id) e.currentTarget.style.background="rgba(255,255,255,0.08)"; }}
-              onMouseLeave={e => { if(view!==n.id) e.currentTarget.style.background="transparent"; }}>
-              <span style={{ fontSize:13, color:view===n.id?"#F0EEFF":"#C8C4D8" }}>{n.icon}</span>
-              <span style={{ fontSize:13, color:view===n.id?"#E9DFFE":"#C0BCCE", fontWeight:view===n.id?700:500 }}>{n.label}</span>
-            </div>
-          ))}
-        </nav>
-
-        {/* Active recurring rules indicator */}
-        {recurringRules.filter(r=>r.active).length > 0 && (
-          <div style={{ padding:"12px 20px", borderTop:"1px solid #D8D0F8", cursor:"pointer" }} onClick={() => setView("settings")}>
-            <p style={{ color:"#C0BCCE", fontSize:10, margin:"0 0 8px", letterSpacing:"0.08em", fontWeight:700 }}>定期スケジュール</p>
-            {recurringRules.filter(r=>r.active).map(r => (
-              <div key={r.id} style={{ display:"flex", gap:7, alignItems:"center", marginBottom:5 }}>
-                <span style={{ fontSize:10, color:"#7C3AED" }}>↻</span>
-                <span style={{ color:"#B0ABCA", fontSize:11, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.title}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </aside>
-
-      {/* MAIN */}
-      <div style={{ flex:1, display:"flex", overflow:"hidden", ...(isMobile ? { marginTop:52 } : {}) }}>
-        <div style={{ flex:1, overflow:"hidden", display:"flex", flexDirection:"column" }}>
-          {view==="calendar" && <CalendarView allPosts={allPosts} weekAnchor={weekAnchor} setWeekAnchor={setWeekAnchor} selectedPost={selectedPost} onSelect={setSelectedPost} onNew={newPost} onNewRecurring={newRecurringRule} />}
-          {view==="list"     && <ListView posts={allPosts} filterStatus={filterStatus} setFilterStatus={setFilterStatus} onSelect={setSelectedPost} onNew={() => newPost(todayStr(),"10:00")} setPosts={setPosts} onStatusChange={upsertPost} onNewRecurring={newRecurringRule} />}
-          {view==="template" && <TemplateView templates={templates} setTemplates={setTemplates} showToast={showToast} />}
-          {view==="dest"     && <DestView showToast={showToast} />}
-          {view==="settings" && <SettingsView recurringRules={recurringRules} setRecurringRules={setRecurringRules} notifSettings={notifSettings} setNotifSettings={setNotifSettings} showToast={showToast} allPosts={allPosts} templates={templates} />}
-          {view==="setup"    && <SetupView posts={posts} templates={templates} recurringRules={recurringRules} showToast={showToast} />}
-          {view==="help"     && <HelpView />}
-        </div>
-
-        {selectedPost !== null && (
-          <div style={isMobile
-            ? { position:"fixed", inset:0, zIndex:60, marginTop:52, display:"flex", flexDirection:"column" }
-            : { height:"100%", display:"flex", flexDirection:"column", flexShrink:0 }}>
-            <EditorPanel post={selectedPost} templates={templates} onSave={upsertPost} onDelete={deletePost} onClose={() => setSelectedPost(null)} onConvertToRecurring={convertToRecurring} onSaveAsTemplate={saveAsTemplate} />
-          </div>
-        )}
-      </div>
-
-      {globalEditRule && (
-        <div style={{ position:"fixed", inset:0, background:"rgba(15,20,35,0.5)", zIndex:300, display:"flex", alignItems:"center", justifyContent:"center", backdropFilter:"blur(3px)" }}
-          onClick={() => setGlobalEditRule(null)}>
-          <div style={{ background:"#fff", borderRadius:16, padding:28, width:460, maxHeight:"85vh", overflowY:"auto" }} onClick={e => e.stopPropagation()}>
-            <div style={{ display:"flex", justifyContent:"space-between", marginBottom:20 }}>
-              <h3 style={{ margin:0, fontSize:15, fontWeight:800, color:"#4B38C8" }}>定期スケジュール</h3>
-              <button onClick={() => setGlobalEditRule(null)} style={{ ...S.ghost, padding:"4px 8px", border:"none", color:"#C0BCCE" }}>✕</button>
-            </div>
-            <label style={S.label}>表示名</label>
-            <input value={globalEditRule.title} onChange={e => setGlobalEditRule({...globalEditRule,title:e.target.value})} style={{ ...S.input, marginBottom:12 }} placeholder="週刊まとめ動画" />
-            <label style={S.label}>タイトルテンプレート（{"{{n}}"}でカウンター）</label>
-            <input value={globalEditRule.titleTemplate} onChange={e => setGlobalEditRule({...globalEditRule,titleTemplate:e.target.value})} style={{ ...S.input, marginBottom:12 }} placeholder="週刊まとめ動画 #{{n}}" />
-            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:12 }}>
-              <div>
-                <label style={S.label}>頻度</label>
-                <select value={globalEditRule.freq} onChange={e => setGlobalEditRule({...globalEditRule,freq:e.target.value})} style={S.input}>
-                  <option value="daily">毎日</option>
-                  <option value="weekly">毎週</option>
-                  <option value="biweekly">隔週</option>
-                  <option value="monthly">毎月</option>
-                </select>
-              </div>
-              {globalEditRule.freq==="weekly" && <div>
-                <label style={S.label}>曜日</label>
-                <select value={globalEditRule.weekDay} onChange={e => setGlobalEditRule({...globalEditRule,weekDay:+e.target.value})} style={S.input}>
-                  {["日","月","火","水","木","金","土"].map((d,i) => <option key={i} value={i}>{d}曜日</option>)}
-                </select>
-              </div>}
-              <div>
-                <label style={S.label}>時刻</label>
-                <input type="time" value={globalEditRule.time} onChange={e => setGlobalEditRule({...globalEditRule,time:e.target.value})} style={S.input} />
-              </div>
-              <div>
-                <label style={S.label}>所要時間（分）</label>
-                <input type="number" value={globalEditRule.duration} onChange={e => setGlobalEditRule({...globalEditRule,duration:+e.target.value})} style={S.input} />
-              </div>
-            </div>
-            <label style={S.label}>開始日</label>
-            <input type="date" value={globalEditRule.startDate} onChange={e => setGlobalEditRule({...globalEditRule,startDate:e.target.value})} style={{ ...S.input, marginBottom:12 }} />
-            <div style={{ marginBottom:20 }}>
-              <label style={S.label}>配信先</label>
-              <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
-                {PLATFORMS.map(pl => {
-                  const on = globalEditRule.platforms.includes(pl.id);
-                  return <div key={pl.id} onClick={() => setGlobalEditRule({...globalEditRule,platforms:on?globalEditRule.platforms.filter(x=>x!==pl.id):[...globalEditRule.platforms,pl.id]})}
-                    style={{ padding:"4px 10px", borderRadius:6, border:`1.5px solid ${on?pl.color:"#C9BCEE"}`, background:on?`${pl.color}15`:"#fff", color:on?pl.color:"#C0BCCE", fontSize:11, fontWeight:700, cursor:"pointer" }}>
-                    {pl.icon} {pl.name}
-                  </div>;
-                })}
-              </div>
-            </div>
-            <div style={{ display:"flex", gap:8, justifyContent:"flex-end" }}>
-              <button onClick={() => setGlobalEditRule(null)} style={S.ghost}>キャンセル</button>
-              <button onClick={() => saveGlobalRule(globalEditRule)} style={S.primary}>保存する</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {searchOpen && <SearchModal posts={allPosts} templates={templates} onSelectPost={handleSelectPost} onClose={() => setSearchOpen(false)} />}
-
-      {toast && (
-        <div style={{ position:"fixed", bottom:24, left:"50%", transform:"translateX(-50%)", background:"#6D4EE8", color:"#fff", borderRadius:10, padding:"11px 22px", fontSize:13, fontWeight:600, zIndex:9999, animation:"fadeUp 0.2s ease", boxShadow:"0 4px 20px rgba(0,0,0,0.3)", whiteSpace:"nowrap" }}>
-          ✓ {toast}
-        </div>
-      )}
-    </div>
-  );
-}
+const INP={width:"100%",background:"#fff",border:"1.5px solid #e0d8ce",borderRadius:8,padding:"7px 10px",color:"#1a1a1a",fontSize:13,outline:"none",boxSizing:"border-box",fontFamily:"inherit"};
